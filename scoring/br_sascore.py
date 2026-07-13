@@ -1,4 +1,4 @@
-"""Scoring functions for molecular properties: BR-SAScore and novelty."""
+"""BR-SAScore: retrosynthetic accessibility scoring."""
 
 from __future__ import annotations
 
