@@ -17,7 +17,6 @@ The optimization objective is the predicted probability that a molecule is antim
 - **Novelty** — the mean Tanimoto distance to the five nearest molecules in the training set.
 
 The resulting archive contains high-performing molecules spanning different regions of chemical space, providing a diverse set of promising antimicrobial candidates rather than a single optimum.
----
 
 
 ## Prerequisites
