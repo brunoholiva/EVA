@@ -1,0 +1,33 @@
+name: eva
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python>=3.12
+  - pip
+  - setuptools<82          # CRITICAL: must be <82 before BRSAScore install
+  - rdkit
+  - numpy
+  - scipy
+  - pandas
+  - scikit-learn
+
+  - pip:
+      - torch
+      - tabpfn==8.0.8
+      - lightning
+      - descriptastorus
+      - selfies
+
+      - ribs[all]
+
+      - matplotlib
+      - seaborn
+      - huggingface_hub
+      - rich
+      - toml
+
+      - pytest
+      - fastparquet
+      - chembl_structure_pipeline
