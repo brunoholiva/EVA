@@ -1,0 +1,141 @@
+"""CMA-MAE optimization loop via pyribs."""
+
+from __future__ import annotations
+
+from typing import Callable
+
+import numpy as np
+from ribs.archives import GridArchive
+from ribs.emitters import EvolutionStrategyEmitter
+from ribs.schedulers import Scheduler
+
+from config import ArchiveConfig, EmitterConfig
+from optimization.constants import INVALID_MOLECULE_OBJECTIVE
+from optimization.evaluator import EvalResult
+
+GenerationCallback = Callable[[int, EvalResult, GridArchive], None]
+
+
+def build_scheduler(
+    archive_cfg: ArchiveConfig,
+    emitter_cfg: EmitterConfig,
+    seed: int,
+) -> Scheduler:
+    """Construct the pyribs scheduler from config.
+
+    Parameters
+    ----------
+    archive_cfg : ArchiveConfig
+        Archive dimensions, ranges, and learning rate.
+    emitter_cfg : EmitterConfig
+        Emitter sigma, batch size, and count.
+    seed : int
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    Scheduler
+        Configured scheduler with one EvolutionStrategyEmitter.
+    """
+    archive = GridArchive(
+        solution_dim=archive_cfg.solution_dim,
+        dims=archive_cfg.dims,
+        ranges=archive_cfg.ranges,
+        learning_rate=archive_cfg.learning_rate,
+        threshold_min=archive_cfg.threshold_min,
+        seed=seed,
+    )
+
+    emitter = EvolutionStrategyEmitter(
+        archive=archive,
+        x0=np.zeros(archive_cfg.solution_dim, dtype=np.float64),
+        sigma0=emitter_cfg.sigma0,
+        bounds=[(-5.0, 5.0)] * archive_cfg.solution_dim,
+        batch_size=emitter_cfg.batch_size,
+        seed=seed,
+    )
+
+    return Scheduler(archive, [emitter])
+
+
+class CMAMAELoop:
+    """CMA-MAE optimization in ChemBed latent space.
+
+    Parameters
+    ----------
+    scheduler : Scheduler
+        Configured pyribs scheduler.
+    evaluate : callable
+        Function ``(z) -> EvalResult`` that scores latent vectors.
+    """
+
+    def __init__(self, scheduler: Scheduler, evaluate) -> None:
+        self._scheduler = scheduler
+        self._evaluate = evaluate
+        self._archive: GridArchive = scheduler.archive
+
+    @property
+    def archive(self) -> GridArchive:
+        """The underlying archive."""
+        return self._archive
+
+    def seed_archive(self, z_seeds: np.ndarray) -> EvalResult:
+        """Evaluate initial seeds and add them to the archive.
+
+        Parameters
+        ----------
+        z_seeds : np.ndarray of shape ``(n, latent_dim)``
+            Latent vectors for the initial population.
+
+        Returns
+        -------
+        EvalResult
+            Scoring results for the seed population.
+        """
+        result = self._evaluate(z_seeds)
+        _add_to_archive(self._archive, z_seeds, result)
+        return result
+
+    def run(
+        self,
+        n_generations: int,
+        eval_every: int = 1,
+        on_generation: GenerationCallback | None = None,
+    ) -> GridArchive:
+        """Execute the CMA-MAE loop.
+
+        Parameters
+        ----------
+        n_generations : int
+            Number of generations to run.
+        eval_every : int
+            How often to call the generation callback.
+        on_generation : callable or None
+            ``fn(gen, result, archive)`` called every *eval_every*
+            generations and at the final generation.
+
+        Returns
+        -------
+        GridArchive
+            The final archive of scored candidates.
+        """
+        for gen in range(n_generations):
+            z = self._scheduler.ask()
+            result = self._evaluate(z)
+            self._scheduler.tell(result.objectives, result.measures)
+
+            if on_generation and (gen % eval_every == 0 or gen == n_generations - 1):
+                on_generation(gen, result, self._archive)
+
+        return self._archive
+
+
+def _add_to_archive(archive: GridArchive, z: np.ndarray, result: EvalResult) -> None:
+    """Add valid candidates from *result* to *archive* one by one."""
+    for i in range(len(z)):
+        if result.objectives[i] != INVALID_MOLECULE_OBJECTIVE:
+            archive.add(
+                solution=z[i : i + 1],
+                objective=result.objectives[i : i + 1],
+                measures=result.measures[i : i + 1],
+            )
