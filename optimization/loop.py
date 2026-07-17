@@ -35,7 +35,7 @@ def build_scheduler(
     Returns
     -------
     Scheduler
-        Configured scheduler with one EvolutionStrategyEmitter.
+        Configured scheduler with ``n_emitters`` EvolutionStrategyEmitters.
     """
     archive = GridArchive(
         solution_dim=archive_cfg.solution_dim,
@@ -46,16 +46,21 @@ def build_scheduler(
         seed=seed,
     )
 
-    emitter = EvolutionStrategyEmitter(
-        archive=archive,
-        x0=np.zeros(archive_cfg.solution_dim, dtype=np.float64),
-        sigma0=emitter_cfg.sigma0,
-        bounds=[(-5.0, 5.0)] * archive_cfg.solution_dim,
-        batch_size=emitter_cfg.batch_size,
-        seed=seed,
-    )
+    emitters = []
+    for i in range(emitter_cfg.n_emitters):
+        rng = np.random.default_rng(seed + i)
+        x0 = rng.standard_normal(archive_cfg.solution_dim).astype(np.float64)
+        emitter = EvolutionStrategyEmitter(
+            archive=archive,
+            x0=x0,
+            sigma0=emitter_cfg.sigma0,
+            bounds=[(-5.0, 5.0)] * archive_cfg.solution_dim,
+            batch_size=emitter_cfg.batch_size,
+            seed=seed + i,
+        )
+        emitters.append(emitter)
 
-    return Scheduler(archive, [emitter])
+    return Scheduler(archive, emitters)
 
 
 class CMAMAELoop:
