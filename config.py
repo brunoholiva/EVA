@@ -50,6 +50,7 @@ class RunConfig:
     n_generations: int
     eval_every: int
     seed: int
+    resume_from: str
 
 
 @dataclass

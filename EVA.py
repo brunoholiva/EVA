@@ -15,9 +15,11 @@ from generative import ChemBedVAE
 from optimization import (
     Evaluator,
     build_scheduler,
+    load_scheduler,
     print_generation,
     print_results,
     save_archive,
+    save_scheduler,
     visualize_archive,
 )
 from optimization.loop import CMAMAELoop
@@ -27,8 +29,8 @@ from scoring.novelty import NoveltyScorer
 console = Console()
 
 
-def _parse_args(argv: list[str] | None) -> str:
-    """Return the config path from CLI arguments."""
+def _parse_args(argv: list[str] | None) -> tuple[str, str | None]:
+    """Return the config path and optional resume path from CLI arguments."""
     parser = argparse.ArgumentParser(description="EVA: Evolution of Viable Antibiotics")
     parser.add_argument(
         "--config",
@@ -36,7 +38,14 @@ def _parse_args(argv: list[str] | None) -> str:
         default="config.toml",
         help="Path to experiment config TOML (default: config.toml)",
     )
-    return parser.parse_args(argv).config
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Path to scheduler.joblib to resume from (overrides config)",
+    )
+    args = parser.parse_args(argv)
+    return args.config, args.resume
 
 
 def _load_vae(cfg: ExperimentConfig) -> ChemBedVAE:
@@ -65,24 +74,15 @@ def _load_scorers(cfg: ExperimentConfig):
     return novelty, tabpfn, featurizer
 
 
-def _seed_and_run(
+def _run_loop(
     loop: CMAMAELoop,
     cfg: ExperimentConfig,
-    vae: ChemBedVAE,
+    output_dir: Path,
+    start_gen: int = 0,
 ) -> None:
-    """Seed the archive and run the optimization loop with a progress bar."""
-    console.print(f"Generating {cfg.generative.n_seeds} random seed molecules ...")
-    rng = np.random.default_rng(cfg.generative.seed)
-    z_seeds = vae.generate_random(cfg.generative.n_seeds, rng=rng)
-    result = loop.seed_archive(z_seeds)
-    console.print(
-        f"  Seeded archive with {result.n_valid}/{len(z_seeds)} valid molecules"
-    )
-
+    """Run the CMA-MAE loop with a progress bar and periodic saves."""
     eval_every = cfg.run.eval_every
     n_gen = cfg.run.n_generations
-
-    console.rule("[bold green]Running CMA-MAE")
 
     columns = [
         TextColumn("[progress.description]{task.description}"),
@@ -95,28 +95,36 @@ def _seed_and_run(
     ]
 
     with Progress(*columns, console=console) as progress:
-        task = progress.add_task("CMA-MAE", total=n_gen, archive_size=0)
+        task = progress.add_task(
+            "CMA-MAE", total=n_gen, completed=start_gen,
+            archive_size=len(loop.archive),
+        )
 
         def _on_progress(gen, result, archive):
             """Print generation table at intervals and update progress bar."""
             if gen % eval_every == 0 or gen == n_gen - 1:
                 print_generation(gen, result, archive)
+                save_scheduler(loop.scheduler, output_dir)
             progress.update(task, completed=gen + 1, archive_size=len(archive))
 
         loop.run(
             n_generations=n_gen,
             eval_every=eval_every,
             on_generation=_on_progress,
+            start_gen=start_gen,
         )
 
 
 def main(argv: list[str] | None = None) -> None:
     """Entry point for the EVA evolution loop."""
-    config_path = _parse_args(argv)
+    config_path, resume_path = _parse_args(argv)
 
     console.rule("[bold green]EVA")
     console.print(f"Loading config from {config_path}")
     cfg = ExperimentConfig.from_toml(config_path)
+
+    output_dir = Path(cfg.output.output_dir) / cfg.output.run_name
+    resume_from = resume_path or cfg.run.resume_from or None
 
     vae = _load_vae(cfg)
     novelty, tabpfn, featurizer = _load_scorers(cfg)
@@ -128,14 +136,35 @@ def main(argv: list[str] | None = None) -> None:
         activity_model=tabpfn,
         featurizer=featurizer,
     )
-    scheduler = build_scheduler(cfg.archive, cfg.emitter, cfg.run.seed)
+
+    if resume_from:
+        console.rule("[bold green]Resuming CMA-MAE")
+        scheduler = load_scheduler(resume_from)
+        start_gen = scheduler.emitters[0]._itrs
+        console.print(f"  Resuming from generation {start_gen}")
+    else:
+        scheduler = build_scheduler(cfg.archive, cfg.emitter, cfg.run.seed)
+        start_gen = 0
+
     loop = CMAMAELoop(scheduler, evaluator)
 
-    _seed_and_run(loop, cfg, vae)
-    print_results(loop.archive, vae.decode)
+    if not resume_from:
+        console.print(
+            f"Generating {cfg.generative.n_seeds} random seed molecules ..."
+        )
+        rng = np.random.default_rng(cfg.generative.seed)
+        z_seeds = vae.generate_random(cfg.generative.n_seeds, rng=rng)
+        result = loop.seed_archive(z_seeds)
+        console.print(
+            f"  Seeded archive with {result.n_valid}/{len(z_seeds)} valid molecules"
+        )
 
-    output_dir = Path(cfg.output.output_dir) / cfg.output.run_name
+    console.rule("[bold green]Running CMA-MAE")
+    _run_loop(loop, cfg, output_dir, start_gen=start_gen)
+
+    print_results(loop.archive, vae.decode)
     save_archive(loop.archive, vae.decode, output_dir)
+    save_scheduler(loop.scheduler, output_dir)
     visualize_archive(loop.archive, output_dir)
 
 

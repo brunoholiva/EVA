@@ -1,4 +1,4 @@
-"""Archive persistence: save and load GridArchive state."""
+"""State persistence: save and load scheduler and archive."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from rich.console import Console
 from ribs.archives import GridArchive
+from ribs.schedulers import Scheduler
 
 from optimization.reporting import _rank_archive
 
@@ -93,3 +94,46 @@ def _export_archive_csv(
         }
     )
     df.to_csv(csv_path, index=False)
+
+
+def save_scheduler(scheduler: Scheduler, output_dir: str | Path) -> Path:
+    """Save full scheduler state (archive + emitter + CMA-ES) as joblib.
+
+    Parameters
+    ----------
+    scheduler : Scheduler
+        The scheduler to persist.
+    output_dir : str or Path
+        Directory to write ``scheduler.joblib``.
+
+    Returns
+    -------
+    Path
+        Path to the saved file.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / "scheduler.joblib"
+    joblib.dump(scheduler, path)
+    console.print(f"Saved scheduler → {path}")
+    return path
+
+
+def load_scheduler(path: str | Path) -> Scheduler:
+    """Load a saved scheduler, ready to continue ask/tell.
+
+    Parameters
+    ----------
+    path : str or Path
+        Path to ``scheduler.joblib``.
+
+    Returns
+    -------
+    Scheduler
+        The restored scheduler with full CMA-ES state.
+    """
+    scheduler: Scheduler = joblib.load(path)
+    console.print(
+        f"Loaded scheduler from {path} ({len(scheduler.archive)} cells)"
+    )
+    return scheduler

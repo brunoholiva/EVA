@@ -79,6 +79,11 @@ class CMAMAELoop:
         """The underlying archive."""
         return self._archive
 
+    @property
+    def scheduler(self) -> Scheduler:
+        """The underlying scheduler."""
+        return self._scheduler
+
     def seed_archive(self, z_seeds: np.ndarray) -> EvalResult:
         """Evaluate initial seeds and add them to the archive.
 
@@ -101,6 +106,7 @@ class CMAMAELoop:
         n_generations: int,
         eval_every: int = 1,
         on_generation: GenerationCallback | None = None,
+        start_gen: int = 0,
     ) -> GridArchive:
         """Execute the CMA-MAE loop.
 
@@ -113,13 +119,15 @@ class CMAMAELoop:
         on_generation : callable or None
             ``fn(gen, result, archive)`` called every *eval_every*
             generations and at the final generation.
+        start_gen : int, default=0
+            Generation to start from (for resuming a previous run).
 
         Returns
         -------
         GridArchive
             The final archive of scored candidates.
         """
-        for gen in range(n_generations):
+        for gen in range(start_gen, n_generations):
             z = self._scheduler.ask()
             result = self._evaluate(z)
             self._scheduler.tell(result.objectives, result.measures)

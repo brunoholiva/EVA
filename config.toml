@@ -14,7 +14,7 @@ n_emitters = 1
 model_repo_id = "3BioCompBio/chembed-default"
 device = "cuda"
 latent_dim = 256
-n_seeds = 5000
+n_seeds = 10000
 seed = 42
 
 [novelty]
@@ -29,9 +29,10 @@ device = "cuda"
 softmax_temperature = 2.0
 
 [run]
-n_generations = 2000
-eval_every = 10
+n_generations = 10000
+eval_every = 1000
 seed = 42
+resume_from = ""
 
 [output]
 output_dir = "results"
