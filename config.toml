@@ -29,9 +29,15 @@ model_path = "data/predictor/tabpfn_model.joblib"
 device = "cuda"
 softmax_temperature = 2.0
 
+[novelty]
+n_neighbors = 5
+n_bits = 2048
+radius = 2
+max_cache_size = 5000
+
 [run]
-n_generations = 100
-eval_every = 10
+n_generations = 1000
+eval_every = 100
 seed = 42
 resume_from = ""
 

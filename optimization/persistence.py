@@ -170,6 +170,7 @@ def load_archive_novelty_cache(
     n_bits: int = 2048,
     radius: int = 2,
     max_cache_size: int = 5000,
+    n_neighbors: int = 5,
 ) -> ArchiveNoveltyScorer:
     """Load an archive novelty scorer from disk, or create an empty one.
 
@@ -183,6 +184,8 @@ def load_archive_novelty_cache(
         Fallback radius if file doesn't exist.
     max_cache_size : int
         Fallback max cache size if file doesn't exist.
+    n_neighbors : int
+        Fallback number of nearest neighbors if file doesn't exist.
 
     Returns
     -------
@@ -198,5 +201,6 @@ def load_archive_novelty_cache(
         return scorer
     console.print("No archive novelty cache found — starting with empty cache")
     return ArchiveNoveltyScorer(
-        n_bits=n_bits, radius=radius, max_cache_size=max_cache_size
+        n_bits=n_bits, radius=radius, max_cache_size=max_cache_size,
+        n_neighbors=n_neighbors,
     )

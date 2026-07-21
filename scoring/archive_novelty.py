@@ -17,8 +17,9 @@ RDLogger.DisableLog("rdApp.*")
 class ArchiveNoveltyScorer:
     """Compute structural novelty relative to existing archive members.
 
-    The score is the median Tanimoto distance (1 - similarity) between a candidate
-    molecule and all molecules already in the archive, based on Morgan fingerprints.
+    The score is the mean Tanimoto distance (1 - similarity) between a candidate
+    molecule and its *k* nearest neighbors among archive members, based on
+    Morgan fingerprints.
 
     *  Score ≈ 0.0 → molecule is very similar to archive contents
     *  Score ≈ 1.0 → molecule is structurally unique vs. archive
@@ -37,6 +38,8 @@ class ArchiveNoveltyScorer:
     max_cache_size : int, default=5000
         Maximum number of fingerprints to keep. Oldest entries are evicted
         first when the cap is exceeded.
+    n_neighbors : int, default=5
+        Number of nearest neighbors to average over.
     """
 
     def __init__(
@@ -44,10 +47,12 @@ class ArchiveNoveltyScorer:
         n_bits: int = 2048,
         radius: int = 2,
         max_cache_size: int = 5000,
+        n_neighbors: int = 5,
     ) -> None:
         self._n_bits = n_bits
         self._radius = radius
         self._max_cache_size = max_cache_size
+        self._n_neighbors = n_neighbors
         self._fingerprints: OrderedDict[int, np.ndarray] = OrderedDict()
         self._cache: np.ndarray = np.empty((0, n_bits), dtype=np.float32)
         self._cache_sums: np.ndarray = np.empty(0, dtype=np.float32)
@@ -138,6 +143,7 @@ class ArchiveNoveltyScorer:
                 "n_bits": self._n_bits,
                 "radius": self._radius,
                 "max_cache_size": self._max_cache_size,
+                "n_neighbors": self._n_neighbors,
                 "fingerprints": self._fingerprints,
             },
             path,
@@ -162,6 +168,7 @@ class ArchiveNoveltyScorer:
             n_bits=data["n_bits"],
             radius=data["radius"],
             max_cache_size=data["max_cache_size"],
+            n_neighbors=data.get("n_neighbors", 5),
         )
         scorer._fingerprints = data["fingerprints"]
         scorer._rebuild_arrays()
@@ -178,7 +185,7 @@ class ArchiveNoveltyScorer:
         Returns
         -------
         np.ndarray of shape ``(len(smiles),)``
-            Median Tanimoto distance to archive members.
+            Mean Tanimoto distance to k nearest archive neighbors.
             Invalid SMILES or empty cache get a default value of 1.0.
         """
         scores = np.ones(len(smiles), dtype=np.float32)
@@ -198,7 +205,13 @@ class ArchiveNoveltyScorer:
         union = batch_sum[:, None] + self._cache_sums[None, :] - intersection
         tanimoto = intersection / (union + 1e-8)
 
-        dist = (1.0 - np.median(tanimoto, axis=1)).astype(np.float32)
+        k = min(self._n_neighbors, tanimoto.shape[1])
+        if k >= tanimoto.shape[1]:
+            dist = (1.0 - tanimoto).mean(axis=1).astype(np.float32)
+        else:
+            topk_idx = np.argpartition(-tanimoto, k, axis=1)[:, :k]
+            topk_sim = np.take_along_axis(tanimoto, topk_idx, axis=1)
+            dist = (1.0 - topk_sim).mean(axis=1).astype(np.float32)
 
         for i, d in zip(valid_idx, dist):
             scores[i] = d

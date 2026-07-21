@@ -47,6 +47,14 @@ class ActivityConfig:
 
 
 @dataclass
+class NoveltyConfig:
+    n_neighbors: int = 5
+    n_bits: int = 2048
+    radius: int = 2
+    max_cache_size: int = 5000
+
+
+@dataclass
 class RunConfig:
     n_generations: int
     eval_every: int
@@ -67,6 +75,7 @@ class ExperimentConfig:
     generative: GenerativeConfig
     ad: ADConfig
     activity: ActivityConfig
+    novelty: NoveltyConfig
     run: RunConfig
     output: OutputConfig
 
@@ -83,6 +92,7 @@ class ExperimentConfig:
             generative=GenerativeConfig(**raw.get("generative", {})),
             ad=ADConfig(**raw.get("ad", {})),
             activity=ActivityConfig(**raw.get("activity", {})),
+            novelty=NoveltyConfig(**raw.get("novelty", {})),
             run=RunConfig(**raw.get("run", {})),
             output=OutputConfig(**raw.get("output", output_defaults)),
         )

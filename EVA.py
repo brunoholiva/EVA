@@ -69,9 +69,10 @@ def _load_scorers(cfg: ExperimentConfig):
         n_neighbors=cfg.ad.n_neighbors,
     )
     archive_novelty = ArchiveNoveltyScorer(
-        n_bits=cfg.ad.n_bits,
-        radius=cfg.ad.radius,
-        max_cache_size=cfg.ad.max_cache_size,
+        n_bits=cfg.novelty.n_bits,
+        radius=cfg.novelty.radius,
+        max_cache_size=cfg.novelty.max_cache_size,
+        n_neighbors=cfg.novelty.n_neighbors,
     )
     tabpfn = load_tabpfn(
         path=cfg.activity.model_path,
@@ -171,9 +172,10 @@ def main(argv: list[str | None] | None = None) -> None:
         cache_path = Path(resume_from).parent / "archive_novelty_cache.joblib"
         restored = load_archive_novelty_cache(
             cache_path,
-            n_bits=cfg.ad.n_bits,
-            radius=cfg.ad.radius,
-            max_cache_size=cfg.ad.max_cache_size,
+            n_bits=cfg.novelty.n_bits,
+            radius=cfg.novelty.radius,
+            max_cache_size=cfg.novelty.max_cache_size,
+            n_neighbors=cfg.novelty.n_neighbors,
         )
         if restored.cache_size == 0 and len(scheduler.archive) > 0:
             console.print("  Rebuilding archive novelty cache from archive ...")
