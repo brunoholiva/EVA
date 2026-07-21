@@ -28,9 +28,12 @@ def _chunk_list(lst: list, chunks: int) -> list[list]:
 
 def _compute_rdkit_descriptors(mol: Chem.Mol, smiles: str, generator) -> np.ndarray:
     """Return 200 RDKit 2D normalized descriptors as a float32 array."""
-    res = generator.processMol(mol, smiles, internalParsing=True)
-    if res[0]:
-        return np.array(res[1:], dtype=np.float32)
+    try:
+        res = generator.processMol(mol, smiles, internalParsing=True)
+        if res[0]:
+            return np.array(res[1:], dtype=np.float32)
+    except Exception:
+        pass
     return np.zeros(N_RDKIT_DESCRIPTORS, dtype=np.float32)
 
 
