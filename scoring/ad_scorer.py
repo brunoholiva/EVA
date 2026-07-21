@@ -1,4 +1,4 @@
-"""Novelty scoring: applicability domain via Tanimoto distance."""
+"""Applicability domain scoring: distance to training set."""
 
 from __future__ import annotations
 
@@ -13,14 +13,14 @@ from featurization.morgan import smiles_to_morgan
 N_NEIGHBORS_DEFAULT: int = 5
 
 
-class NoveltyScorer:
+class ADScorer:
     """Compute applicability domain score for candidate molecules.
 
-    The score is the mean Tanimoto distance (1 - similarity) to the *k*
-    nearest neighbors in the training set, computed via batch matrix
+    The score is the mean Tanimoto distance (1 - similarity) to the *k* nearest
+    neighbors in the antibiotic training set, computed via batch matrix
     multiplication on cached training fingerprints.
 
-    *  Score ≈ 0.0 → molecule is very similar to training data
+    *  Score ≈ 0.0 → molecule is very similar to known antibiotics
     *  Score ≈ 1.0 → molecule is far from the training manifold
 
     Parameters
@@ -41,6 +41,11 @@ class NoveltyScorer:
         self._radius: int = obj.get("radius", 2)
         self._n_neighbors: int = n_neighbors
         RDLogger.DisableLog("rdApp.*")
+
+    @property
+    def n_features(self) -> int:
+        """Number of bits in the Morgan fingerprint."""
+        return self._n_bits
 
     def __call__(self, smiles: list[str]) -> np.ndarray:
         """Score a batch of SMILES strings.
