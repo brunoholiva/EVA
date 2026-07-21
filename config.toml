@@ -1,7 +1,7 @@
 [archive]
 solution_dim = 256
-dims = [50, 50]
-ranges = [[1.0, 10.0], [0.0, 1.0]]
+dims = [20, 20, 10]
+ranges = [[1.0, 10.0], [0.0, 1.0], [0.0, 1.0]]
 learning_rate = 1.0
 threshold_min = 0.0
 
@@ -14,14 +14,15 @@ n_emitters = 3
 model_repo_id = "3BioCompBio/chembed-default"
 device = "cuda"
 latent_dim = 256
-n_seeds = 2000
+n_seeds = 100
 seed = 42
 
-[novelty]
+[ad]
 ad_model_path = "data/predictor/ad_model.joblib"
 n_neighbors = 5
 n_bits = 2048
 radius = 2
+max_cache_size = 5000
 
 [activity]
 model_path = "data/predictor/tabpfn_model.joblib"
@@ -29,7 +30,7 @@ device = "cuda"
 softmax_temperature = 2.0
 
 [run]
-n_generations = 50
+n_generations = 100
 eval_every = 10
 seed = 42
 resume_from = ""

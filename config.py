@@ -31,11 +31,12 @@ class GenerativeConfig:
 
 
 @dataclass
-class NoveltyConfig:
+class ADConfig:
     ad_model_path: str
     n_neighbors: int
     n_bits: int
     radius: int
+    max_cache_size: int = 5000
 
 
 @dataclass
@@ -64,7 +65,7 @@ class ExperimentConfig:
     archive: ArchiveConfig
     emitter: EmitterConfig
     generative: GenerativeConfig
-    novelty: NoveltyConfig
+    ad: ADConfig
     activity: ActivityConfig
     run: RunConfig
     output: OutputConfig
@@ -80,7 +81,7 @@ class ExperimentConfig:
             archive=ArchiveConfig(**raw.get("archive", {})),
             emitter=EmitterConfig(**raw.get("emitter", {})),
             generative=GenerativeConfig(**raw.get("generative", {})),
-            novelty=NoveltyConfig(**raw.get("novelty", {})),
+            ad=ADConfig(**raw.get("ad", {})),
             activity=ActivityConfig(**raw.get("activity", {})),
             run=RunConfig(**raw.get("run", {})),
             output=OutputConfig(**raw.get("output", output_defaults)),
