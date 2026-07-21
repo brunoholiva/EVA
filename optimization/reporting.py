@@ -72,6 +72,7 @@ def print_results(archive: GridArchive, decode_fn, top_n: int = 10) -> None:
     table.add_column("P(active)", style="magenta")
     table.add_column("BR-SAScore", style="yellow")
     table.add_column("Novelty", style="green")
+    table.add_column("Proximity", style="blue")
 
     for rank, idx in enumerate(order, 1):
         smi = smiles[rank - 1] if rank - 1 < len(smiles) else ""
@@ -81,6 +82,7 @@ def print_results(archive: GridArchive, decode_fn, top_n: int = 10) -> None:
             f"{arch_data['objective'][idx]:.4f}",
             f"{arch_data['measures'][idx][0]:.2f}",
             f"{arch_data['measures'][idx][1]:.3f}",
+            f"{arch_data['measures'][idx][2]:.3f}",
         )
     console.print(table)
 

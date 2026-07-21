@@ -10,6 +10,8 @@ import numpy as np
 
 from optimization.constants import INVALID_MOLECULE_OBJECTIVE
 from scoring.br_sascore import compute_br_sascore
+from scoring.ad_scorer import ADScorer
+from scoring.archive_novelty import ArchiveNoveltyScorer
 
 if TYPE_CHECKING:
     from featurization.features import MoleculeFeaturizer
@@ -30,7 +32,8 @@ class EvalResult:
     measures: np.ndarray
     p_active: np.ndarray
     br_sascore: np.ndarray
-    novelty: np.ndarray
+    ad: np.ndarray
+    archive_novelty: np.ndarray
     n_valid: int
     gen_time: float
 
@@ -43,8 +46,10 @@ class Evaluator:
     decode : callable
         Function ``(n, latent_dim) -> list[str]`` that decodes latent
         vectors to SMILES.
-    novelty : MolecularScorer
-        Applicability-domain scorer.
+    ad : ADScorer
+        Applicability-domain scorer (distance to training set).
+    archive_novelty : ArchiveNoveltyScorer
+        Structural diversity scorer (distance to archive members).
     activity : callable
         Function ``(smiles, model, featurizer) -> (preds, probs)``.
     activity_model : fitted TabPFNClassifier
@@ -56,13 +61,15 @@ class Evaluator:
     def __init__(
         self,
         decode,
-        novelty: MolecularScorer,
+        ad: ADScorer,
+        archive_novelty: ArchiveNoveltyScorer,
         activity,
         activity_model,
-        featurizer: MoleculeFeaturizer,
+        featurizer,
     ) -> None:
         self._decode_fn = decode
-        self._novelty = novelty
+        self._ad = ad
+        self._archive_novelty = archive_novelty
         self._activity_fn = activity
         self._activity_model = activity_model
         self._featurizer = featurizer
@@ -95,18 +102,19 @@ class Evaluator:
         return result
 
     def _score_valid(self, valid_smiles: list[str]) -> _ScoreBundle | None:
-        """Score valid SMILES with all three scorers."""
+        """Score valid SMILES with all four scorers."""
         if not valid_smiles:
             return None
 
         br = np.array([compute_br_sascore(s) for s in valid_smiles], dtype=np.float64)
-        nov = self._novelty(valid_smiles)
+        ad = self._ad(valid_smiles)
+        nov = self._archive_novelty(valid_smiles)
         _, probs = self._activity_fn(
             valid_smiles, self._activity_model, self._featurizer
         )
         pa = probs[:, 1]
 
-        return _ScoreBundle(br=br, nov=nov, pa=pa)
+        return _ScoreBundle(br=br, ad=ad, nov=nov, pa=pa)
 
     def _assemble(
         self,
@@ -117,10 +125,11 @@ class Evaluator:
     ) -> EvalResult:
         """Map per-molecule scores back to the full candidate array."""
         objectives = np.full(n, INVALID_MOLECULE_OBJECTIVE, dtype=np.float64)
-        measures = np.zeros((n, 2), dtype=np.float64)
+        measures = np.zeros((n, 3), dtype=np.float64)
         p_active = np.zeros(n, dtype=np.float64)
         br_arr = np.full(n, np.nan, dtype=np.float64)
-        nov_arr = np.zeros(n, dtype=np.float64)
+        ad_arr = np.zeros(n, dtype=np.float64)
+        nov_arr = np.ones(n, dtype=np.float64)
 
         if scores is None:
             return EvalResult(
@@ -129,7 +138,8 @@ class Evaluator:
                 measures=measures,
                 p_active=p_active,
                 br_sascore=br_arr,
-                novelty=nov_arr,
+                ad=ad_arr,
+                archive_novelty=nov_arr,
                 n_valid=int(valid_mask.sum()),
                 gen_time=0.0,
             )
@@ -143,9 +153,10 @@ class Evaluator:
                 continue
 
             objectives[i] = scores.pa[j]
-            measures[i] = [scores.br[j], scores.nov[j]]
+            measures[i] = [scores.br[j], scores.ad[j], scores.nov[j]]
             p_active[i] = scores.pa[j]
             br_arr[i] = scores.br[j]
+            ad_arr[i] = scores.ad[j]
             nov_arr[i] = scores.nov[j]
             j += 1
 
@@ -155,7 +166,8 @@ class Evaluator:
             measures=measures,
             p_active=p_active,
             br_sascore=br_arr,
-            novelty=nov_arr,
+            ad=ad_arr,
+            archive_novelty=nov_arr,
             n_valid=int(valid_mask.sum()),
             gen_time=0.0,
         )
@@ -163,9 +175,10 @@ class Evaluator:
 
 @dataclass
 class _ScoreBundle:
-    """Container for per-molecule scores from all three scorers."""
+    """Container for per-molecule scores from all four scorers."""
 
     br: np.ndarray
+    ad: np.ndarray
     nov: np.ndarray
     pa: np.ndarray
 

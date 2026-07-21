@@ -1,4 +1,4 @@
-"""Archive visualization via pyribs heatmaps."""
+"""Archive visualization via pyribs."""
 
 from __future__ import annotations
 
@@ -9,13 +9,14 @@ from ribs.archives import GridArchive
 
 console = Console()
 
+AXIS_LABELS = ["BR-SAScore", "Novelty", "Proximity"]
+
 
 def visualize_archive(
     archive: GridArchive,
     output_dir: str | Path,
-    filename: str = "heatmap.png",
 ) -> Path:
-    """Render a pyribs grid archive heatmap and save it as PNG.
+    """Render a parallel axes plot and save it as PNG.
 
     Parameters
     ----------
@@ -23,8 +24,6 @@ def visualize_archive(
         The archive to visualize.
     output_dir : str or Path
         Directory to write the image.
-    filename : str
-        Output file name.
 
     Returns
     -------
@@ -34,17 +33,25 @@ def visualize_archive(
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from ribs.visualize import grid_archive_heatmap
+    from ribs.visualize import parallel_axes_plot
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    img_path = output_dir / filename
+    img_path = output_dir / "parallel_axes.png"
 
-    fig, ax = plt.subplots(figsize=(10, 8))
-    grid_archive_heatmap(archive, ax=ax, cmap="magma")
-    ax.set_title("Archive Heatmap — BR-SAScore vs Novelty")
+    fig, ax = plt.subplots(figsize=(12, 6))
+    measure_order = [
+        (i, label) for i, label in enumerate(AXIS_LABELS[: archive.measure_dim])
+    ]
+    parallel_axes_plot(
+        archive,
+        ax=ax,
+        measure_order=measure_order,
+        cmap="magma",
+    )
+    ax.set_title("Archive — Parallel Axes (color = P(active))")
     fig.tight_layout()
     fig.savefig(img_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    console.print(f"Saved heatmap → {img_path}")
+    console.print(f"Saved parallel axes → {img_path}")
     return img_path

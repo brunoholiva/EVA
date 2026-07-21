@@ -14,6 +14,7 @@ from optimization.constants import INVALID_MOLECULE_OBJECTIVE
 from optimization.evaluator import EvalResult
 
 GenerationCallback = Callable[[int, EvalResult, GridArchive], None]
+StepCallback = Callable[[int, EvalResult, GridArchive], None]
 
 
 def build_scheduler(
@@ -111,6 +112,7 @@ class CMAMAELoop:
         n_generations: int,
         eval_every: int = 1,
         on_generation: GenerationCallback | None = None,
+        on_step: StepCallback | None = None,
         start_gen: int = 0,
     ) -> GridArchive:
         """Execute the CMA-MAE loop.
@@ -124,6 +126,9 @@ class CMAMAELoop:
         on_generation : callable or None
             ``fn(gen, result, archive)`` called every *eval_every*
             generations and at the final generation.
+        on_step : callable or None
+            ``fn(gen, result, archive)`` called every generation (for
+            progress bar updates).
         start_gen : int, default=0
             Generation to start from (for resuming a previous run).
 
@@ -132,15 +137,53 @@ class CMAMAELoop:
         GridArchive
             The final archive of scored candidates.
         """
+        archive_novelty = self._evaluate._archive_novelty
+        decode_fn = self._evaluate._decode_fn
+
         for gen in range(start_gen, n_generations):
+            old_indices = self._snapshot_archive()
+
             z = self._scheduler.ask()
             result = self._evaluate(z)
             self._scheduler.tell(result.objectives, result.measures)
+
+            self._sync_novelty_cache(old_indices, archive_novelty, decode_fn)
+
+            if on_step:
+                on_step(gen, result, self._archive)
 
             if on_generation and (gen % eval_every == 0 or gen == n_generations - 1):
                 on_generation(gen, result, self._archive)
 
         return self._archive
+
+    def _snapshot_archive(self) -> set[int]:
+        """Return the set of occupied cell indices."""
+        if len(self._archive) == 0:
+            return set()
+        return set(self._archive.data()["index"].tolist())
+
+    def _sync_novelty_cache(
+        self,
+        old_indices: set[int],
+        archive_novelty,
+        decode_fn,
+    ) -> None:
+        """Update the archive novelty cache with newly inserted entries."""
+        if len(self._archive) == 0:
+            return
+        new_data = self._archive.data()
+        new_indices = set(new_data["index"].tolist())
+        added = new_indices - old_indices
+        if not added:
+            return
+        added_mask = np.isin(new_data["index"], list(added))
+        added_solutions = new_data["solution"][added_mask]
+        smiles = decode_fn(added_solutions)
+        valid_smiles = [s for s in smiles if s != ""]
+        if valid_smiles:
+            cell_indices = new_data["index"][added_mask]
+            archive_novelty.update(cell_indices, valid_smiles)
 
 
 def _add_to_archive(archive: GridArchive, z: np.ndarray, result: EvalResult) -> None:
