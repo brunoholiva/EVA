@@ -11,10 +11,11 @@ Each generated molecule is evaluated using a **TabPFN** classifier trained on th
 - **MACCS keys**
 - **200 molecular descriptors** computed with **Descriptastorus**
 
-The optimization objective is the predicted probability that a molecule is antimicrobial. To encourage exploration and diversity, EVA organizes solutions in a two-dimensional behavior space defined by:
+The optimization objective is the predicted probability that a molecule is antimicrobial. To encourage exploration and diversity, EVA organizes solutions in a three-dimensional behavior space defined by:
 
 - **[BR-SA Score](https://link.springer.com/article/10.1186/s13321-024-00879-0)** — a retrosynthesizability/synthetic accessibility measure.
-- **Novelty** — the mean Tanimoto distance to the five nearest molecules in the training set.
+- **Applicability Domain** — the mean Tanimoto distance to the five nearest molecules in the training set.
+- **Novelty** — the mean Tanimoto distance to the *k* nearest archive elites.
 
 The resulting archive contains high-performing molecules spanning different regions of chemical space, providing a diverse set of promising antimicrobial candidates rather than a single optimum.
 
@@ -74,8 +75,9 @@ All parameters live in `config.toml` (parsed by `config.py` into dataclasses):
 | `[archive]` | `dims`, `ranges`, `learning_rate`, `threshold_min` |
 | `[emitter]` | `sigma0`, `batch_size`, `n_emitters` |
 | `[generative]` | `model_repo_id`, `device`, `latent_dim`, `n_seeds`, `seed` |
-| `[novelty]` | `ad_model_path`, `n_neighbors`, `n_bits`, `radius` |
+| `[ad]` | `ad_model_path`, `n_neighbors`, `n_bits`, `radius`, `max_cache_size` |
 | `[activity]` | `model_path`, `device`, `softmax_temperature` |
+| `[novelty]` | `n_neighbors`, `n_bits`, `radius`, `max_cache_size` |
 | `[run]` | `n_generations`, `eval_every`, `seed` |
 | `[output]` | `output_dir`, `run_name` |
 
@@ -100,12 +102,14 @@ prediction/
 
 scoring/
   br_sascore.py         # BR-SAScore wrapper
-  novelty.py            # NoveltyScorer (kNN distance from predictor training data)
+  ad_scorer.py          # ADScorer (kNN distance from predictor training data)
+  archive_novelty.py    # ArchiveNoveltyScorer (kNN distance from archive elites)
 
 optimization/
   loop.py               # CMAMAELoop + build_scheduler
   evaluator.py          # Evaluator class + EvalResult dataclass
   persistence.py        # save_archive / load_archive
+  constants.py          # Sentinel values
   reporting.py          # Rich console tables
   visualization.py      # Grid archive heatmap
 
@@ -115,8 +119,8 @@ results/                # Output directory
 ```
 
 ## TODO
+- Integrate cytotoxicity prediction into the optimization (or as a dimension)
+- Add dimensions of chemical properties
 - Make the predictor public
-- Make the loop accept more than 1 emitter
 - Integrate the workflow with optuna for hyper-parameter tuning
 - Add tensorboard to track metrics
-- Add a way to continue the loop from an archive
