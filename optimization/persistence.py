@@ -21,6 +21,7 @@ def save_archive(
     archive: GridArchive,
     decode_fn,
     output_dir: str | Path,
+    suffix: str = "archive",
 ) -> Path:
     """Save the archive as joblib (full state) and CSV (tabular data).
 
@@ -31,7 +32,9 @@ def save_archive(
     decode_fn : callable
         Latent vectors → SMILES decoder.
     output_dir : str or Path
-        Directory to write ``archive.joblib`` and ``archive.csv``.
+        Directory to write ``<suffix>.joblib`` and ``<suffix>.csv``.
+    suffix : str
+        Base filename for the saved files (default ``"archive"``).
 
     Returns
     -------
@@ -41,11 +44,11 @@ def save_archive(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    joblib_path = output_dir / "archive.joblib"
+    joblib_path = output_dir / f"{suffix}.joblib"
     joblib.dump(archive, joblib_path)
     console.print(f"Saved archive → {joblib_path}")
 
-    csv_path = output_dir / "archive.csv"
+    csv_path = output_dir / f"{suffix}.csv"
     _export_archive_csv(archive, decode_fn, csv_path)
     console.print(f"Saved CSV     → {csv_path}")
 
@@ -78,7 +81,14 @@ def _export_archive_csv(
     """Write archive contents to a CSV file."""
     if len(archive) == 0:
         pd.DataFrame(
-            columns=["rank", "smiles", "p_active", "br_sascore", "ad", "archive_novelty"]
+            columns=[
+                "rank",
+                "smiles",
+                "p_active",
+                "br_sascore",
+                "ad",
+                "archive_novelty",
+            ]
         ).to_csv(csv_path, index=False)
         return
 
@@ -201,6 +211,8 @@ def load_archive_novelty_cache(
         return scorer
     console.print("No archive novelty cache found — starting with empty cache")
     return ArchiveNoveltyScorer(
-        n_bits=n_bits, radius=radius, max_cache_size=max_cache_size,
+        n_bits=n_bits,
+        radius=radius,
+        max_cache_size=max_cache_size,
         n_neighbors=n_neighbors,
     )

@@ -47,12 +47,22 @@ def build_scheduler(
         seed=seed,
     )
 
+    result_archive = GridArchive(
+        solution_dim=archive_cfg.solution_dim,
+        dims=archive_cfg.dims,
+        ranges=archive_cfg.ranges,
+    )
+
     emitters = []
     for i in range(emitter_cfg.n_emitters):
         rng = np.random.default_rng(seed + i)
         x0 = rng.standard_normal(archive_cfg.solution_dim).astype(np.float64)
         emitter = EvolutionStrategyEmitter(
             archive=archive,
+            ranker="imp",
+            es="cma_es",
+            selection_rule="mu",
+            restart_rule="basic",
             x0=x0,
             sigma0=emitter_cfg.sigma0,
             bounds=[(-5.0, 5.0)] * archive_cfg.solution_dim,
@@ -61,7 +71,7 @@ def build_scheduler(
         )
         emitters.append(emitter)
 
-    return Scheduler(archive, emitters)
+    return Scheduler(archive, emitters, result_archive)
 
 
 class CMAMAELoop:
@@ -79,11 +89,17 @@ class CMAMAELoop:
         self._scheduler = scheduler
         self._evaluate = evaluate
         self._archive: GridArchive = scheduler.archive
+        self._result_archive: GridArchive | None = scheduler.result_archive
 
     @property
     def archive(self) -> GridArchive:
-        """The underlying archive."""
+        """The primary (CMA-MAE) archive."""
         return self._archive
+
+    @property
+    def result_archive(self) -> GridArchive | None:
+        """Best-so-far archive (tracks elite per cell)."""
+        return self._result_archive
 
     @property
     def scheduler(self) -> Scheduler:
@@ -91,7 +107,7 @@ class CMAMAELoop:
         return self._scheduler
 
     def seed_archive(self, z_seeds: np.ndarray) -> EvalResult:
-        """Evaluate initial seeds and add them to the archive.
+        """Evaluate initial seeds and add them to both archives.
 
         Parameters
         ----------
@@ -105,6 +121,8 @@ class CMAMAELoop:
         """
         result = self._evaluate(z_seeds)
         _add_to_archive(self._archive, z_seeds, result)
+        if self._result_archive is not None:
+            _add_to_archive(self._result_archive, z_seeds, result)
         return result
 
     def run(
@@ -141,13 +159,15 @@ class CMAMAELoop:
         decode_fn = self._evaluate._decode_fn
 
         for gen in range(start_gen, n_generations):
-            old_indices = self._snapshot_archive()
+            old_primary, old_result = self._snapshot_archive()
 
             z = self._scheduler.ask()
             result = self._evaluate(z)
             self._scheduler.tell(result.objectives, result.measures)
 
-            self._sync_novelty_cache(old_indices, archive_novelty, decode_fn)
+            self._sync_novelty_cache(
+                old_primary, old_result, archive_novelty, decode_fn
+            )
 
             if on_step:
                 on_step(gen, result, self._archive)
@@ -157,33 +177,46 @@ class CMAMAELoop:
 
         return self._archive
 
-    def _snapshot_archive(self) -> set[int]:
-        """Return the set of occupied cell indices."""
+    def _snapshot_archive(self) -> tuple[set[int], set[int]]:
+        """Return occupied cell indices for both archives."""
         if len(self._archive) == 0:
-            return set()
-        return set(self._archive.data()["index"].tolist())
+            primary = set()
+        else:
+            primary = set(self._archive.data()["index"].tolist())
+
+        if self._result_archive is None or len(self._result_archive) == 0:
+            result = set()
+        else:
+            result = set(self._result_archive.data()["index"].tolist())
+
+        return primary, result
 
     def _sync_novelty_cache(
         self,
-        old_indices: set[int],
+        old_primary: set[int],
+        old_result: set[int],
         archive_novelty,
         decode_fn,
     ) -> None:
         """Update the archive novelty cache with newly inserted entries."""
-        if len(self._archive) == 0:
-            return
-        new_data = self._archive.data()
-        new_indices = set(new_data["index"].tolist())
-        added = new_indices - old_indices
-        if not added:
-            return
-        added_mask = np.isin(new_data["index"], list(added))
-        added_solutions = new_data["solution"][added_mask]
-        smiles = decode_fn(added_solutions)
-        valid_smiles = [s for s in smiles if s != ""]
-        if valid_smiles:
-            cell_indices = new_data["index"][added_mask]
-            archive_novelty.update(cell_indices, valid_smiles)
+        for archive, old_indices in [
+            (self._archive, old_primary),
+            (self._result_archive, old_result),
+        ]:
+            if archive is None or len(archive) == 0:
+                continue
+            new_data = archive.data()
+            new_indices = set(new_data["index"].tolist())
+            added = new_indices - old_indices
+            if not added:
+                continue
+            added_mask = np.isin(new_data["index"], list(added))
+            added_solutions = new_data["solution"][added_mask]
+            smiles = decode_fn(added_solutions)
+            valid_smiles = [s for s in smiles if s != ""]
+            if valid_smiles:
+                cell_indices = new_data["index"][added_mask]
+                archive_novelty.update(cell_indices, valid_smiles)
 
 
 def _add_to_archive(archive: GridArchive, z: np.ndarray, result: EvalResult) -> None:

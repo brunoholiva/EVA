@@ -15,6 +15,7 @@ AXIS_LABELS = ["BR-SAScore", "Novelty", "Proximity"]
 def visualize_archive(
     archive: GridArchive,
     output_dir: str | Path,
+    filename: str = "parallel_axes.png",
 ) -> Path:
     """Render a parallel axes plot and save it as PNG.
 
@@ -24,6 +25,8 @@ def visualize_archive(
         The archive to visualize.
     output_dir : str or Path
         Directory to write the image.
+    filename : str
+        Name of the output image file (default ``"parallel_axes.png"``).
 
     Returns
     -------
@@ -31,13 +34,14 @@ def visualize_archive(
         Path to the saved image.
     """
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from ribs.visualize import parallel_axes_plot
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    img_path = output_dir / "parallel_axes.png"
+    img_path = output_dir / filename
 
     fig, ax = plt.subplots(figsize=(12, 6))
     measure_order = [
