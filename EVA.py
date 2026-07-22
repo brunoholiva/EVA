@@ -14,6 +14,7 @@ from featurization.features import MoleculeFeaturizer
 from generative import ChemBedVAE
 from optimization import (
     Evaluator,
+    TensorBoardLogger,
     build_scheduler,
     load_archive_novelty_cache,
     load_scheduler,
@@ -28,6 +29,7 @@ from optimization.loop import CMAMAELoop
 from prediction.activity import load_model as load_tabpfn, predict
 from scoring.ad_scorer import ADScorer
 from scoring.archive_novelty import ArchiveNoveltyScorer
+from scoring.physchem import PhysChemScorer
 
 console = Console()
 
@@ -62,7 +64,7 @@ def _load_vae(cfg: ExperimentConfig) -> ChemBedVAE:
 
 
 def _load_scorers(cfg: ExperimentConfig):
-    """Load AD scorer, archive novelty scorer, TabPFN, and featurizer."""
+    """Load AD scorer, archive novelty scorer, physchem scorer, TabPFN, and featurizer."""
     console.print("Loading scorers ...")
     ad = ADScorer(
         model_path=cfg.ad.ad_model_path,
@@ -74,13 +76,14 @@ def _load_scorers(cfg: ExperimentConfig):
         max_cache_size=cfg.novelty.max_cache_size,
         n_neighbors=cfg.novelty.n_neighbors,
     )
+    physchem = PhysChemScorer()
     tabpfn = load_tabpfn(
         path=cfg.activity.model_path,
         device=cfg.activity.device,
         softmax_temperature=cfg.activity.softmax_temperature,
     )
     featurizer = MoleculeFeaturizer()
-    return ad, archive_novelty, tabpfn, featurizer
+    return ad, archive_novelty, physchem, tabpfn, featurizer
 
 
 def _run_loop(
@@ -88,6 +91,7 @@ def _run_loop(
     cfg: ExperimentConfig,
     output_dir: Path,
     archive_novelty: ArchiveNoveltyScorer,
+    tb_logger: TensorBoardLogger,
     start_gen: int = 0,
 ) -> None:
     """Run the CMA-MAE loop with a progress bar and periodic saves."""
@@ -123,11 +127,19 @@ def _run_loop(
                 archive_size=len(archive),
                 cache_size=archive_novelty.cache_size,
             )
+            tb_logger.log_generation(
+                step=gen,
+                result=result,
+                archive=archive,
+                result_archive=loop.result_archive,
+                cache_size=archive_novelty.cache_size,
+                dimension_names=cfg.archive.active_dimension_names(),
+            )
 
         def _on_progress(gen, result, archive):
             """Print generation table and save state at intervals."""
             if gen % eval_every == 0 or gen == n_gen - 1:
-                print_generation(gen, result, archive)
+                print_generation(gen, result, archive, loop.result_archive)
                 save_scheduler(loop.scheduler, output_dir)
                 save_archive_novelty_cache(archive_novelty, output_dir)
 
@@ -150,17 +162,20 @@ def main(argv: list[str | None] | None = None) -> None:
 
     output_dir = Path(cfg.output.output_dir) / cfg.output.run_name
     resume_from = resume_path or cfg.run.resume_from or None
+    tb_logger = TensorBoardLogger(cfg.tensorboard, output_dir)
 
     vae = _load_vae(cfg)
-    ad, archive_novelty, tabpfn, featurizer = _load_scorers(cfg)
+    ad, archive_novelty, physchem, tabpfn, featurizer = _load_scorers(cfg)
 
     evaluator = Evaluator(
         decode=vae.decode,
         ad=ad,
         archive_novelty=archive_novelty,
+        physchem=physchem,
         activity=predict,
         activity_model=tabpfn,
         featurizer=featurizer,
+        archive_cfg=cfg.archive,
     )
 
     if resume_from:
@@ -181,8 +196,7 @@ def main(argv: list[str | None] | None = None) -> None:
             console.print("  Rebuilding archive novelty cache from archive ...")
             _rebuild_novelty_cache(scheduler.archive, vae.decode, archive_novelty)
         else:
-            archive_novelty._fingerprints = restored._fingerprints
-            archive_novelty._rebuild_arrays()
+            archive_novelty.restore(restored)
     else:
         scheduler = build_scheduler(cfg.archive, cfg.emitter, cfg.run.seed)
         start_gen = 0
@@ -199,25 +213,66 @@ def main(argv: list[str | None] | None = None) -> None:
         )
         _rebuild_novelty_cache(loop.archive, vae.decode, archive_novelty)
 
-    console.rule("[bold green]Running CMA-MAE")
-    _run_loop(loop, cfg, output_dir, archive_novelty, start_gen=start_gen)
+    try:
+        console.rule("[bold green]Running CMA-MAE")
+        _run_loop(
+            loop,
+            cfg,
+            output_dir,
+            archive_novelty,
+            tb_logger,
+            start_gen=start_gen,
+        )
 
-    print_results(loop.archive, vae.decode)
-    save_archive(loop.archive, vae.decode, output_dir)
-    save_scheduler(loop.scheduler, output_dir)
-    save_archive_novelty_cache(archive_novelty, output_dir)
-    visualize_archive(loop.archive, output_dir)
+        print_results(
+            loop.archive,
+            vae.decode,
+            result_archive=loop.result_archive,
+            dimension_names=cfg.archive.active_dimension_names(),
+        )
+        save_archive(
+            loop.archive,
+            vae.decode,
+            output_dir,
+            dimension_names=cfg.archive.active_dimension_names(),
+        )
+        if loop.result_archive is not None:
+            save_archive(
+                loop.result_archive,
+                vae.decode,
+                output_dir,
+                suffix="result_archive",
+                dimension_names=cfg.archive.active_dimension_names(),
+            )
+        save_scheduler(loop.scheduler, output_dir)
+        save_archive_novelty_cache(archive_novelty, output_dir)
+        visualize_archive(
+            loop.archive,
+            output_dir,
+            dimension_names=cfg.archive.active_dimension_names(),
+        )
+        if loop.result_archive is not None:
+            visualize_archive(
+                loop.result_archive,
+                output_dir,
+                filename="result_archive_heatmap.png",
+                dimension_names=cfg.archive.active_dimension_names(),
+            )
+    finally:
+        tb_logger.close()
 
 
-def _rebuild_novelty_cache(archive, decode_fn, archive_novelty: ArchiveNoveltyScorer) -> None:
+def _rebuild_novelty_cache(
+    archive, decode_fn, archive_novelty: ArchiveNoveltyScorer
+) -> None:
     """Decode all archive solutions and rebuild the archive novelty cache."""
     if len(archive) == 0:
         return
     data = archive.data()
+    cell_indices = data["index"]
     solutions = data["solution"]
     smiles = decode_fn(solutions)
-    valid_smiles = [s for s in smiles if s != ""]
-    archive_novelty.rebuild(valid_smiles)
+    archive_novelty.rebuild(smiles, cell_indices=cell_indices)
     console.print(
         f"  Archive novelty cache: {archive_novelty.cache_size} fingerprints "
         f"(max {archive_novelty.max_cache_size})"
