@@ -14,6 +14,7 @@ from optimization.persistence import (
     save_scheduler,
 )
 from optimization.reporting import print_generation, print_results
+from optimization.tensorboard import TensorBoardLogger
 from optimization.visualization import visualize_archive
 
 __all__ = [
@@ -30,5 +31,6 @@ __all__ = [
     "save_archive",
     "save_archive_novelty_cache",
     "save_scheduler",
+    "TensorBoardLogger",
     "visualize_archive",
 ]
