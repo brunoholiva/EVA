@@ -22,6 +22,7 @@ def save_archive(
     decode_fn,
     output_dir: str | Path,
     suffix: str = "archive",
+    dimension_names: list[str] | None = None,
 ) -> Path:
     """Save the archive as joblib (full state) and CSV (tabular data).
 
@@ -35,6 +36,8 @@ def save_archive(
         Directory to write ``<suffix>.joblib`` and ``<suffix>.csv``.
     suffix : str
         Base filename for the saved files (default ``"archive"``).
+    dimension_names : list of str or None
+        Names of enabled archive dimensions.
 
     Returns
     -------
@@ -49,7 +52,7 @@ def save_archive(
     console.print(f"Saved archive → {joblib_path}")
 
     csv_path = output_dir / f"{suffix}.csv"
-    _export_archive_csv(archive, decode_fn, csv_path)
+    _export_archive_csv(archive, decode_fn, csv_path, dimension_names)
     console.print(f"Saved CSV     → {csv_path}")
 
     return output_dir
@@ -77,34 +80,29 @@ def _export_archive_csv(
     archive: GridArchive,
     decode_fn,
     csv_path: Path,
+    dimension_names: list[str] | None = None,
 ) -> None:
     """Write archive contents to a CSV file."""
+    if dimension_names is None:
+        dimension_names = [f"dim_{i}" for i in range(archive.measure_dim)]
+
     if len(archive) == 0:
-        pd.DataFrame(
-            columns=[
-                "rank",
-                "smiles",
-                "p_active",
-                "br_sascore",
-                "ad",
-                "archive_novelty",
-            ]
-        ).to_csv(csv_path, index=False)
+        columns = ["rank", "smiles", "p_active"] + dimension_names
+        pd.DataFrame(columns=columns).to_csv(csv_path, index=False)
         return
 
     order, _, smiles = _rank_archive(archive, decode_fn, len(archive))
     arch_data = archive.data()
 
-    df = pd.DataFrame(
-        {
-            "rank": np.arange(1, len(order) + 1),
-            "smiles": smiles,
-            "p_active": arch_data["objective"][order],
-            "br_sascore": arch_data["measures"][order, 0],
-            "ad": arch_data["measures"][order, 1],
-            "archive_novelty": arch_data["measures"][order, 2],
-        }
-    )
+    data = {
+        "rank": np.arange(1, len(order) + 1),
+        "smiles": smiles,
+        "p_active": arch_data["objective"][order],
+    }
+    for d, name in enumerate(dimension_names):
+        data[name] = arch_data["measures"][order, d]
+
+    df = pd.DataFrame(data)
     df.to_csv(csv_path, index=False)
 
 

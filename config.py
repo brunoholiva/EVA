@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import toml
 
@@ -10,8 +10,46 @@ class ArchiveConfig:
     solution_dim: int
     dims: list[int]
     ranges: list[list[float]]
+    dimension_names: list[str]
+    dimension_enabled: list[bool]
     learning_rate: float
     threshold_min: float
+
+    def validate(self) -> None:
+        """Validate archive dimension configuration."""
+        lengths = {
+            "dims": len(self.dims),
+            "ranges": len(self.ranges),
+            "dimension_names": len(self.dimension_names),
+            "dimension_enabled": len(self.dimension_enabled),
+        }
+        if len(set(lengths.values())) != 1:
+            raise ValueError(
+                "archive dims, ranges, dimension_names, and dimension_enabled "
+                "must have the same length"
+            )
+        if not any(self.dimension_enabled):
+            raise ValueError("archive must enable at least one dimension")
+
+        valid_names = {"br_sascore", "ad", "novelty", "logp", "tpsa"}
+        invalid_names = [name for name in self.dimension_names if name not in valid_names]
+        if invalid_names:
+            raise ValueError(
+                "archive dimension_names contain unsupported metrics: "
+                + ", ".join(invalid_names)
+            )
+
+    def active_dims(self) -> list[int]:
+        """Return grid resolution for enabled dimensions only."""
+        return [d for d, e in zip(self.dims, self.dimension_enabled) if e]
+
+    def active_ranges(self) -> list[list[float]]:
+        """Return value ranges for enabled dimensions only."""
+        return [r for r, e in zip(self.ranges, self.dimension_enabled) if e]
+
+    def active_dimension_names(self) -> list[str]:
+        """Return names of enabled dimensions."""
+        return [n for n, e in zip(self.dimension_names, self.dimension_enabled) if e]
 
 
 @dataclass
@@ -69,6 +107,15 @@ class OutputConfig:
 
 
 @dataclass
+class TensorBoardConfig:
+    enabled: bool = False
+    log_dir: str = "tensorboard"
+    scalar_every: int = 1
+    histogram_every: int = 10
+    figure_every: int = 25
+
+
+@dataclass
 class ExperimentConfig:
     archive: ArchiveConfig
     emitter: EmitterConfig
@@ -78,6 +125,7 @@ class ExperimentConfig:
     novelty: NoveltyConfig
     run: RunConfig
     output: OutputConfig
+    tensorboard: TensorBoardConfig = field(default_factory=TensorBoardConfig)
 
     @classmethod
     def from_toml(cls, file_path: str) -> ExperimentConfig:
@@ -86,7 +134,7 @@ class ExperimentConfig:
             raw = toml.load(f)
 
         output_defaults = {"output_dir": "results", "run_name": "default"}
-        return cls(
+        config = cls(
             archive=ArchiveConfig(**raw.get("archive", {})),
             emitter=EmitterConfig(**raw.get("emitter", {})),
             generative=GenerativeConfig(**raw.get("generative", {})),
@@ -95,4 +143,7 @@ class ExperimentConfig:
             novelty=NoveltyConfig(**raw.get("novelty", {})),
             run=RunConfig(**raw.get("run", {})),
             output=OutputConfig(**raw.get("output", output_defaults)),
+            tensorboard=TensorBoardConfig(**raw.get("tensorboard", {})),
         )
+        config.archive.validate()
+        return config

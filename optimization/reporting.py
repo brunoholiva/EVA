@@ -56,6 +56,7 @@ def print_results(
     decode_fn,
     top_n: int = 10,
     result_archive: GridArchive | None = None,
+    dimension_names: list[str] | None = None,
 ) -> None:
     """Print the final archive summary and top candidates.
 
@@ -69,6 +70,8 @@ def print_results(
         Number of top candidates to display.
     result_archive : GridArchive or None
         Best-so-far archive; used for reporting if provided.
+    dimension_names : list of str or None
+        Names of enabled archive dimensions.
     """
     report = result_archive if result_archive is not None else archive
 
@@ -84,24 +87,27 @@ def print_results(
 
     order, solutions, smiles = _rank_archive(report, decode_fn, top_n)
 
+    if dimension_names is None:
+        dimension_names = [f"dim_{i}" for i in range(report.measure_dim)]
+
     table = Table(title="Top Candidates", show_header=True)
     table.add_column("Rank", style="cyan")
     table.add_column("SMILES", style="white")
     table.add_column("P(active)", style="magenta")
-    table.add_column("BR-SAScore", style="yellow")
-    table.add_column("Novelty", style="green")
-    table.add_column("Proximity", style="blue")
+
+    for name in dimension_names:
+        table.add_column(name, style="yellow")
 
     for rank, idx in enumerate(order, 1):
         smi = smiles[rank - 1] if rank - 1 < len(smiles) else ""
-        table.add_row(
+        row = [
             str(rank),
             smi,
             f"{arch_data['objective'][idx]:.4f}",
-            f"{arch_data['measures'][idx][0]:.2f}",
-            f"{arch_data['measures'][idx][1]:.3f}",
-            f"{arch_data['measures'][idx][2]:.3f}",
-        )
+        ]
+        for d in range(report.measure_dim):
+            row.append(f"{arch_data['measures'][idx][d]:.3f}")
+        table.add_row(*row)
     console.print(table)
 
 

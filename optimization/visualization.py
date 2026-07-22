@@ -9,13 +9,12 @@ from ribs.archives import GridArchive
 
 console = Console()
 
-AXIS_LABELS = ["BR-SAScore", "Novelty", "Proximity"]
-
 
 def visualize_archive(
     archive: GridArchive,
     output_dir: str | Path,
     filename: str = "parallel_axes.png",
+    dimension_names: list[str] | None = None,
 ) -> Path:
     """Render a parallel axes plot and save it as PNG.
 
@@ -27,6 +26,8 @@ def visualize_archive(
         Directory to write the image.
     filename : str
         Name of the output image file (default ``"parallel_axes.png"``).
+    dimension_names : list of str or None
+        Names of enabled archive dimensions.
 
     Returns
     -------
@@ -43,9 +44,12 @@ def visualize_archive(
     output_dir.mkdir(parents=True, exist_ok=True)
     img_path = output_dir / filename
 
+    if dimension_names is None:
+        dimension_names = [f"dim_{i}" for i in range(archive.measure_dim)]
+
     fig, ax = plt.subplots(figsize=(12, 6))
     measure_order = [
-        (i, label) for i, label in enumerate(AXIS_LABELS[: archive.measure_dim])
+        (i, label) for i, label in enumerate(dimension_names[: archive.measure_dim])
     ]
     parallel_axes_plot(
         archive,

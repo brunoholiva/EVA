@@ -1,14 +1,16 @@
 [archive]
 solution_dim = 256
-dims = [20, 20, 10]
-ranges = [[1.0, 10.0], [0.0, 1.0], [0.0, 1.0]]
-learning_rate = 1.0
+dims = [20, 20, 10, 10, 10]
+ranges = [[1.0, 10.0], [0.0, 1.0], [0.0, 1.0], [-1.0, 6.0], [0.0, 200.0]]
+dimension_names = ["br_sascore", "ad", "novelty", "logp", "tpsa"]
+dimension_enabled = [true, true, false, true, true]
+learning_rate = 0.01
 threshold_min = 0.0
 
 [emitter]
 sigma0 = 0.3
 batch_size = 500
-n_emitters = 3
+n_emitters = 4
 
 [generative]
 model_repo_id = "3BioCompBio/chembed-default"
@@ -36,11 +38,18 @@ radius = 2
 max_cache_size = 5000
 
 [run]
-n_generations = 1000
-eval_every = 100
+n_generations = 10
+eval_every = 1
 seed = 42
 resume_from = ""
 
 [output]
 output_dir = "results"
 run_name = "default"
+
+[tensorboard]
+enabled = true
+log_dir = "tensorboard"
+scalar_every = 1
+histogram_every = 10
+figure_every = 25

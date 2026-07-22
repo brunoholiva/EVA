@@ -38,10 +38,13 @@ def build_scheduler(
     Scheduler
         Configured scheduler with ``n_emitters`` EvolutionStrategyEmitters.
     """
+    active_dims = archive_cfg.active_dims()
+    active_ranges = archive_cfg.active_ranges()
+
     archive = GridArchive(
         solution_dim=archive_cfg.solution_dim,
-        dims=archive_cfg.dims,
-        ranges=archive_cfg.ranges,
+        dims=active_dims,
+        ranges=active_ranges,
         learning_rate=archive_cfg.learning_rate,
         threshold_min=archive_cfg.threshold_min,
         seed=seed,
@@ -49,8 +52,8 @@ def build_scheduler(
 
     result_archive = GridArchive(
         solution_dim=archive_cfg.solution_dim,
-        dims=archive_cfg.dims,
-        ranges=archive_cfg.ranges,
+        dims=active_dims,
+        ranges=active_ranges,
     )
 
     emitters = []
@@ -155,8 +158,8 @@ class CMAMAELoop:
         GridArchive
             The final archive of scored candidates.
         """
-        archive_novelty = self._evaluate._archive_novelty
-        decode_fn = self._evaluate._decode_fn
+        archive_novelty = self._evaluate.archive_novelty
+        decode_fn = self._evaluate.decode_fn
 
         for gen in range(start_gen, n_generations):
             old_primary, old_result = self._snapshot_archive()
