@@ -10,6 +10,7 @@ import numpy as np
 from rdkit import RDLogger
 
 from featurization.morgan import smiles_to_morgan
+from featurization.tanimoto import batch_tanimoto_topk
 
 RDLogger.DisableLog("rdApp.*")
 
@@ -82,6 +83,11 @@ class ArchiveNoveltyScorer:
             self._fingerprints.popitem(last=False)
         self._rebuild_arrays()
 
+    def restore(self, scorer: ArchiveNoveltyScorer) -> None:
+        """Replace this scorer's cache with another scorer's cache."""
+        self._fingerprints = OrderedDict(scorer._fingerprints)
+        self._rebuild_arrays()
+
     def update(self, cell_indices: np.ndarray, smiles: list[str]) -> None:
         """Add fingerprints for newly inserted archive members.
 
@@ -105,7 +111,9 @@ class ArchiveNoveltyScorer:
             self._fingerprints.move_to_end(cell)
         self._evict()
 
-    def rebuild(self, smiles: list[str]) -> None:
+    def rebuild(
+        self, smiles: list[str], cell_indices: np.ndarray | None = None
+    ) -> None:
         """Replace the entire cache with fingerprints for the given SMILES.
 
         Use this on startup or resume to initialize the cache from the full
@@ -115,19 +123,27 @@ class ArchiveNoveltyScorer:
         ----------
         smiles : list of str
             SMILES strings of all molecules currently in the archive.
+        cell_indices : np.ndarray of int or None, default=None
+            Archive cell indices corresponding to *smiles*. If omitted,
+            sequential indices are assigned.
         """
         self._fingerprints.clear()
         if not smiles:
             self._rebuild_arrays()
             return
-        fps, _valid_idx = smiles_to_morgan(
+        if cell_indices is None:
+            cell_indices = np.arange(len(smiles), dtype=int)
+        if len(cell_indices) != len(smiles):
+            raise ValueError("cell_indices must have the same length as smiles")
+        fps, valid_idx = smiles_to_morgan(
             smiles, radius=self._radius, fp_size=self._n_bits
         )
         if len(fps) == 0:
             self._rebuild_arrays()
             return
-        for i, fp in enumerate(fps):
-            self._fingerprints[i] = fp.astype(np.float32)
+        for local_i, global_i in enumerate(valid_idx):
+            cell = int(cell_indices[global_i])
+            self._fingerprints[cell] = fps[local_i].astype(np.float32)
         self._evict()
 
     def save(self, path: str | Path) -> None:
@@ -199,19 +215,9 @@ class ArchiveNoveltyScorer:
         if len(fps) == 0:
             return scores
 
-        batch_sum = fps.sum(axis=1)
-
-        intersection = fps @ self._cache.T
-        union = batch_sum[:, None] + self._cache_sums[None, :] - intersection
-        tanimoto = intersection / (union + 1e-8)
-
-        k = min(self._n_neighbors, tanimoto.shape[1])
-        if k >= tanimoto.shape[1]:
-            dist = (1.0 - tanimoto).mean(axis=1).astype(np.float32)
-        else:
-            topk_idx = np.argpartition(-tanimoto, k, axis=1)[:, :k]
-            topk_sim = np.take_along_axis(tanimoto, topk_idx, axis=1)
-            dist = (1.0 - topk_sim).mean(axis=1).astype(np.float32)
+        dist = batch_tanimoto_topk(
+            fps, self._cache, self._cache_sums, self._n_neighbors
+        )
 
         for i, d in zip(valid_idx, dist):
             scores[i] = d
