@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
 from ribs.archives import GridArchive
 
 from config import TensorBoardConfig
 from optimization.evaluator import EvalResult
+from optimization.plotting import create_parallel_axes_figure
 
 
 def _load_summary_writer_class():
@@ -78,7 +78,7 @@ class TensorBoardLogger:
             self._log_archive_histograms(report_archive, dimension_names, step)
 
         if step % self._cfg.figure_every == 0 and report_archive.measure_dim >= 3:
-            figure = _make_parallel_axes_figure(report_archive, dimension_names)
+            figure = create_parallel_axes_figure(report_archive, dimension_names)
             if figure is not None:
                 self._writer.add_figure("figures/archive_parallel_axes", figure, step)
 
@@ -88,9 +88,7 @@ class TensorBoardLogger:
             return
         self._writer.close()
 
-    def _log_archive_stats(
-        self, prefix: str, archive: GridArchive, step: int
-    ) -> None:
+    def _log_archive_stats(self, prefix: str, archive: GridArchive, step: int) -> None:
         """Log scalar stats from a pyribs archive."""
         stats = archive.stats
         self._writer.add_scalar(f"{prefix}/coverage", float(stats.coverage), step)
@@ -132,7 +130,9 @@ class TensorBoardLogger:
 
         active = result.p_active[result.p_active > 0]
         if len(active) > 0:
-            self._writer.add_scalar("eval/best_p_active_batch", float(active.max()), step)
+            self._writer.add_scalar(
+                "eval/best_p_active_batch", float(active.max()), step
+            )
             self._writer.add_scalar(
                 "eval/mean_p_active_batch", float(active.mean()), step
             )
@@ -157,31 +157,3 @@ class TensorBoardLogger:
             self._writer.add_histogram(
                 f"dist/{metric_name}", data["measures"][:, idx], step
             )
-
-
-def _make_parallel_axes_figure(
-    archive: GridArchive, dimension_names: list[str]
-):
-    """Create a parallel axes figure for the current archive."""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from ribs.visualize import parallel_axes_plot
-
-    if len(archive) == 0:
-        return None
-
-    fig, ax = plt.subplots(figsize=(12, 6))
-    measure_order = [
-        (i, label) for i, label in enumerate(dimension_names[: archive.measure_dim])
-    ]
-    parallel_axes_plot(
-        archive,
-        ax=ax,
-        measure_order=measure_order,
-        cmap="magma",
-    )
-    ax.set_title("Archive — Parallel Axes (color = P(active))")
-    fig.tight_layout()
-    return fig

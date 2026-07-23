@@ -7,6 +7,8 @@ from pathlib import Path
 from rich.console import Console
 from ribs.archives import GridArchive
 
+from optimization.plotting import create_parallel_axes_figure
+
 console = Console()
 
 
@@ -38,7 +40,6 @@ def visualize_archive(
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from ribs.visualize import parallel_axes_plot
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -47,18 +48,11 @@ def visualize_archive(
     if dimension_names is None:
         dimension_names = [f"dim_{i}" for i in range(archive.measure_dim)]
 
-    fig, ax = plt.subplots(figsize=(12, 6))
-    measure_order = [
-        (i, label) for i, label in enumerate(dimension_names[: archive.measure_dim])
-    ]
-    parallel_axes_plot(
-        archive,
-        ax=ax,
-        measure_order=measure_order,
-        cmap="magma",
-    )
-    ax.set_title("Archive — Parallel Axes (color = P(active))")
-    fig.tight_layout()
+    fig = create_parallel_axes_figure(archive, dimension_names)
+    if fig is None:
+        console.print(f"No elites to visualize — skipped {img_path}")
+        return img_path
+
     fig.savefig(img_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     console.print(f"Saved parallel axes → {img_path}")

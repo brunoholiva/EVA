@@ -13,6 +13,7 @@ from optimization.persistence import (
     save_archive_novelty_cache,
     save_scheduler,
 )
+from optimization.plotting import create_parallel_axes_figure
 from optimization.reporting import print_generation, print_results
 from optimization.tensorboard import TensorBoardLogger
 from optimization.visualization import visualize_archive
@@ -23,6 +24,7 @@ __all__ = [
     "Evaluator",
     "INVALID_MOLECULE_OBJECTIVE",
     "build_scheduler",
+    "create_parallel_axes_figure",
     "load_archive",
     "load_archive_novelty_cache",
     "load_scheduler",
