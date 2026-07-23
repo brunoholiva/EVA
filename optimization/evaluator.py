@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
+from joblib import Parallel, delayed
 from rdkit import Chem
 
 from optimization.constants import INVALID_MOLECULE_OBJECTIVE
-from scoring.br_sascore import compute_br_sascore
+from scoring.br_sascore import compute_br_sascore_batch
 from scoring.ad_scorer import ADScorer
 from scoring.archive_novelty import ArchiveNoveltyScorer
 from scoring.physchem import PhysChemScorer
@@ -127,17 +129,28 @@ class Evaluator:
         return result
 
     def _score_valid(self, valid_smiles: list[str]) -> _ScoreBundle | None:
-        """Score valid SMILES with all scorers."""
+        """Score valid SMILES with all scorers.
+
+        CPU-bound scorers (BR-SAScore, AD, PhysChem) run concurrently
+        with GPU-bound TabPFN via ThreadPoolExecutor.
+        """
         if not valid_smiles:
             return None
 
-        br = np.array([compute_br_sascore(s) for s in valid_smiles], dtype=np.float64)
-        ad = self._ad(valid_smiles)
-        nov = self._archive_novelty(valid_smiles)
-        phys = self._physchem(valid_smiles)
-        _, probs = self._activity_fn(
-            valid_smiles, self._activity_model, self._featurizer
-        )
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            br_future = pool.submit(compute_br_sascore_batch, valid_smiles)
+            ad_future = pool.submit(self._ad, valid_smiles)
+            nov_future = pool.submit(self._archive_novelty, valid_smiles)
+            phys_future = pool.submit(self._physchem, valid_smiles)
+            _, probs = self._activity_fn(
+                valid_smiles, self._activity_model, self._featurizer
+            )
+
+            br = br_future.result()
+            ad = ad_future.result()
+            nov = nov_future.result()
+            phys = phys_future.result()
+
         pa = probs[:, 1]
 
         return _ScoreBundle(
@@ -232,8 +245,14 @@ class _ScoreBundle:
     pa: np.ndarray
 
 
-def _validity_mask(smiles: list[str]) -> np.ndarray:
+def _check_valid(smi: str) -> bool:
+    """Check if a single SMILES string is chemically valid."""
+    return bool(smi) and Chem.MolFromSmiles(smi) is not None
+
+
+def _validity_mask(smiles: list[str], n_jobs: int = -1) -> np.ndarray:
     """Return a boolean mask of chemically valid SMILES strings."""
-    return np.array(
-        [bool(s) and Chem.MolFromSmiles(s) is not None for s in smiles], dtype=bool
+    results = Parallel(n_jobs=n_jobs, prefer="processes")(
+        delayed(_check_valid)(s) for s in smiles
     )
+    return np.array(results, dtype=bool)

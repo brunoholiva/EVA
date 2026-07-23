@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import warnings
 
+import numpy as np
+from joblib import Parallel, delayed
 from rdkit import Chem
 
 _scorer = None
@@ -53,3 +55,24 @@ def compute_br_sascore(smiles: str) -> float:
         return score
     except Exception:
         return float("nan")
+
+
+def compute_br_sascore_batch(smiles: list[str], n_jobs: int = -1) -> np.ndarray:
+    """Compute BR-SAScore for a batch of SMILES in parallel.
+
+    Parameters
+    ----------
+    smiles : list of str
+        SMILES strings to score.
+    n_jobs : int, default=-1
+        Number of parallel workers. -1 uses all CPUs.
+
+    Returns
+    -------
+    np.ndarray of shape ``(len(smiles),)``
+        BR-SAScore for each molecule. Invalid SMILES receive NaN.
+    """
+    scores = Parallel(n_jobs=n_jobs, prefer="processes")(
+        delayed(compute_br_sascore)(s) for s in smiles
+    )
+    return np.array(scores, dtype=np.float64)

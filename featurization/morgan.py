@@ -7,6 +7,7 @@ Generators are cached by ``(radius, fp_size)`` to avoid re-instantiation.
 from __future__ import annotations
 
 import numpy as np
+from joblib import Parallel, delayed
 from rdkit import Chem
 from rdkit.Chem.rdFingerprintGenerator import GetMorganGenerator
 
@@ -46,10 +47,23 @@ def compute_morgan(
     return np.array(gen.GetFingerprint(mol), dtype=np.float32)
 
 
+def _compute_single_fp(
+    smi: str, radius: int, fp_size: int
+) -> tuple[np.ndarray | None, int]:
+    """Compute Morgan FP for one SMILES. Returns (fp or None, original_index)."""
+    if not smi or not smi.strip():
+        return None, -1
+    mol = Chem.MolFromSmiles(smi)
+    if mol is None:
+        return None, -1
+    return compute_morgan(mol, radius=radius, fp_size=fp_size), -1
+
+
 def smiles_to_morgan(
     smiles: list[str],
     radius: int = 2,
     fp_size: int = 2048,
+    n_jobs: int = -1,
 ) -> tuple[np.ndarray, list[int]]:
     """Convert SMILES strings to Morgan fingerprints in batch.
 
@@ -65,6 +79,8 @@ def smiles_to_morgan(
         Morgan fingerprint radius.
     fp_size : int, default=2048
         Fingerprint bit length.
+    n_jobs : int, default=-1
+        Number of parallel workers. -1 uses all CPUs.
 
     Returns
     -------
@@ -73,16 +89,15 @@ def smiles_to_morgan(
     valid_idx : list of int
         Original indices of valid molecules.
     """
+    results = Parallel(n_jobs=n_jobs, prefer="processes")(
+        delayed(_compute_single_fp)(smi, radius, fp_size) for smi in smiles
+    )
     fps: list[np.ndarray] = []
     valid_idx: list[int] = []
-    for i, smi in enumerate(smiles):
-        if not smi or not smi.strip():
-            continue
-        mol = Chem.MolFromSmiles(smi)
-        if mol is None:
-            continue
-        fps.append(compute_morgan(mol, radius=radius, fp_size=fp_size))
-        valid_idx.append(i)
+    for i, (fp, _) in enumerate(results):
+        if fp is not None:
+            fps.append(fp)
+            valid_idx.append(i)
     if not fps:
         return np.empty((0, fp_size), dtype=np.float32), valid_idx
     return np.array(fps, dtype=np.float32), valid_idx
