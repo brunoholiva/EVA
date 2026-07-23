@@ -9,6 +9,7 @@ import numpy as np
 from rdkit import RDLogger
 
 from featurization.morgan import smiles_to_morgan
+from featurization.tanimoto import batch_tanimoto_topk
 
 N_NEIGHBORS_DEFAULT: int = 5
 
@@ -69,17 +70,9 @@ class ADScorer:
         if len(fps) == 0:
             return scores
 
-        batch_sum = fps.sum(axis=1)
-
-        intersection = fps @ self._train_fps.T
-        union = batch_sum[:, None] + self._train_sum[None, :] - intersection
-        tanimoto = intersection / (union + 1e-8)
-
-        k = min(self._n_neighbors, tanimoto.shape[1])
-        topk_idx = np.argpartition(-tanimoto, k, axis=1)[:, :k]
-        topk_sim = np.take_along_axis(tanimoto, topk_idx, axis=1)
-        mean_dist = (1.0 - topk_sim).mean(axis=1).astype(np.float32)
-
-        for i, d in zip(valid_idx, mean_dist):
+        dist = batch_tanimoto_topk(
+            fps, self._train_fps, self._train_sum, self._n_neighbors
+        )
+        for i, d in zip(valid_idx, dist):
             scores[i] = d
         return scores
