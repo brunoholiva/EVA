@@ -42,6 +42,8 @@ def create_parallel_axes_figure(
         ax=ax,
         measure_order=measure_order,
         cmap="magma",
+        vmin=0.0,
+        vmax=1.0,
     )
     ax.set_title("Archive — Parallel Axes (color = P(active))")
     fig.tight_layout()
