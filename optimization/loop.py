@@ -68,7 +68,7 @@ def build_scheduler(
             restart_rule="basic",
             x0=x0,
             sigma0=emitter_cfg.sigma0,
-            bounds=[(-5.0, 5.0)] * archive_cfg.solution_dim,
+            bounds=None,
             batch_size=emitter_cfg.batch_size,
             seed=seed + i,
         )
