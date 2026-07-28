@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
+import selfies as sf
 from joblib import Parallel, delayed
 from rdkit import Chem
 
@@ -16,6 +17,8 @@ from scoring.br_sascore import compute_br_sascore_batch
 from scoring.ad_scorer import ADScorer
 from scoring.archive_novelty import ArchiveNoveltyScorer
 from scoring.physchem import PhysChemScorer
+
+MAX_SELFIES_TOKENS = 200
 
 if TYPE_CHECKING:
     from config import ArchiveConfig
@@ -246,8 +249,24 @@ class _ScoreBundle:
 
 
 def _check_valid(smi: str) -> bool:
-    """Check if a single SMILES string is chemically valid."""
-    return bool(smi) and Chem.MolFromSmiles(smi) is not None
+    """Check if a single SMILES string is chemically valid.
+
+    Rejects empty strings, molecules that fail RDKit parsing, and
+    molecules whose SELFIES token count exceeds *MAX_SELFIES_TOKENS*
+    (catches pathological repeating chains from extreme latent vectors).
+    """
+    if not smi:
+        return False
+    if Chem.MolFromSmiles(smi) is None:
+        return False
+    try:
+        selfies = sf.encoder(smi)
+        tokens = list(sf.split_selfies(selfies))
+        if len(tokens) > MAX_SELFIES_TOKENS:
+            return False
+    except Exception:
+        return False
+    return True
 
 
 def _validity_mask(smiles: list[str], n_jobs: int = -1) -> np.ndarray:
