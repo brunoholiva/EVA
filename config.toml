@@ -1,10 +1,10 @@
 [archive]
 solution_dim = 256
-dims = [20, 20, 10, 10, 10]
-ranges = [[1.0, 10.0], [0.0, 1.0], [0.0, 1.0], [-1.0, 6.0], [0.0, 200.0]]
-dimension_names = ["br_sascore", "ad", "novelty", "logp", "tpsa"]
-dimension_enabled = [true, true, false, true, true]
-learning_rate = 0.01
+dims = [15, 15, 10, 10, 10, 10]
+ranges = [[1.0, 6.0], [0.0, 0.7], [0.0, 1.0], [-1.0, 6.0], [0.0, 200.0], [50.0, 800.0]]
+dimension_names = ["br_sascore", "ad", "novelty", "logp", "tpsa", "mw"]
+dimension_enabled = [true, true, false, true, true, true]
+learning_rate = 0.1
 threshold_min = 0.0
 
 [emitter]
@@ -16,7 +16,7 @@ n_emitters = 4
 model_repo_id = "3BioCompBio/chembed-default"
 device = "cuda"
 latent_dim = 256
-n_seeds = 100
+n_seeds = 2500
 seed = 42
 
 [ad]
@@ -38,14 +38,14 @@ radius = 2
 max_cache_size = 5000
 
 [run]
-n_generations = 10
-eval_every = 1
+n_generations = 150
+eval_every = 10
 seed = 42
 resume_from = ""
 
 [output]
 output_dir = "results"
-run_name = "default"
+run_name = "exp1"
 
 [tensorboard]
 enabled = true

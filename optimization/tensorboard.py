@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
+from dataclasses import asdict
 from pathlib import Path
 
 from ribs.archives import GridArchive
 
-from config import TensorBoardConfig
+from config import ExperimentConfig, TensorBoardConfig
 from optimization.evaluator import EvalResult
 from optimization.plotting import create_parallel_axes_figure
 
@@ -53,6 +55,18 @@ class TensorBoardLogger:
     def enabled(self) -> bool:
         """Whether TensorBoard logging is enabled."""
         return self._writer is not None
+
+    def log_config(self, config: ExperimentConfig) -> None:
+        """Log the full experiment config as a TensorBoard text entry.
+
+        Call once at startup so each run's hyperparameters are visible
+        in the TensorBoard UI alongside the scalar curves.
+        """
+        if self._writer is None:
+            return
+        config_dict = asdict(config)
+        config_json = json.dumps(config_dict, indent=2, default=str)
+        self._writer.add_text("config/full", config_json)
 
     def log_generation(
         self,
@@ -150,7 +164,7 @@ class TensorBoardLogger:
         name_to_index = {
             name: idx for idx, name in enumerate(dimension_names[: archive.measure_dim])
         }
-        for metric_name in ["br_sascore", "logp", "tpsa"]:
+        for metric_name in ["br_sascore", "logp", "tpsa", "mw"]:
             if metric_name not in name_to_index:
                 continue
             idx = name_to_index[metric_name]

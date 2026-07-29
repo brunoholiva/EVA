@@ -26,10 +26,9 @@ from optimization import (
     visualize_archive,
 )
 from optimization.loop import CMAMAELoop
-from prediction.activity import load_model as load_tabpfn, predict
+from prediction.activity import load_model as load_tabpfn, predict_from_features
 from scoring.ad_scorer import ADScorer
 from scoring.archive_novelty import ArchiveNoveltyScorer
-from scoring.physchem import PhysChemScorer
 
 console = Console()
 
@@ -64,7 +63,7 @@ def _load_vae(cfg: ExperimentConfig) -> ChemBedVAE:
 
 
 def _load_scorers(cfg: ExperimentConfig):
-    """Load AD scorer, archive novelty scorer, physchem scorer, TabPFN, and featurizer."""
+    """Load AD scorer, archive novelty scorer, TabPFN, and featurizer."""
     console.print("Loading scorers ...")
     ad = ADScorer(
         model_path=cfg.ad.ad_model_path,
@@ -76,14 +75,13 @@ def _load_scorers(cfg: ExperimentConfig):
         max_cache_size=cfg.novelty.max_cache_size,
         n_neighbors=cfg.novelty.n_neighbors,
     )
-    physchem = PhysChemScorer()
     tabpfn = load_tabpfn(
         path=cfg.activity.model_path,
         device=cfg.activity.device,
         softmax_temperature=cfg.activity.softmax_temperature,
     )
     featurizer = MoleculeFeaturizer()
-    return ad, archive_novelty, physchem, tabpfn, featurizer
+    return ad, archive_novelty, tabpfn, featurizer
 
 
 def _run_loop(
@@ -140,6 +138,12 @@ def _run_loop(
             """Print generation table and save state at intervals."""
             if gen % eval_every == 0 or gen == n_gen - 1:
                 print_generation(gen, result, archive, loop.result_archive)
+                if gen > 0 and result.timings.decode > 0:
+                    t = result.timings
+                    console.print(
+                        f"  ⏱ decode={t.decode:.1f}s valid={t.validity:.1f}s "
+                        f"feat={t.featurize_predict:.1f}s cpu={t.cpu_scorers:.1f}s"
+                    )
                 save_scheduler(loop.scheduler, output_dir)
                 save_archive_novelty_cache(archive_novelty, output_dir)
 
@@ -163,16 +167,16 @@ def main(argv: list[str | None] | None = None) -> None:
     output_dir = Path(cfg.output.output_dir) / cfg.output.run_name
     resume_from = resume_path or cfg.run.resume_from or None
     tb_logger = TensorBoardLogger(cfg.tensorboard, output_dir)
+    tb_logger.log_config(cfg)
 
     vae = _load_vae(cfg)
-    ad, archive_novelty, physchem, tabpfn, featurizer = _load_scorers(cfg)
+    ad, archive_novelty, tabpfn, featurizer = _load_scorers(cfg)
 
     evaluator = Evaluator(
         decode=vae.decode,
         ad=ad,
         archive_novelty=archive_novelty,
-        physchem=physchem,
-        activity=predict,
+        activity=predict_from_features,
         activity_model=tabpfn,
         featurizer=featurizer,
         archive_cfg=cfg.archive,

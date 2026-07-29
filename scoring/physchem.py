@@ -1,4 +1,9 @@
-"""Physicochemical property scoring (LogP, TPSA)."""
+"""Physicochemical property scoring (LogP, TPSA).
+
+Deprecated: LogP and TPSA are computed as part of the MolBehavior
+pipeline in :mod:`scoring.molecule_behavior`.  This module is kept
+for backward compatibility but is no longer called by the evaluator.
+"""
 
 from __future__ import annotations
 
@@ -31,6 +36,11 @@ def _compute_single(smi: str) -> tuple[float, float]:
 class PhysChemScorer:
     """Compute LogP and TPSA for batches of SMILES.
 
+    .. deprecated::
+        Use :func:`scoring.molecule_behavior.batch_molecule_behaviors`
+        instead, which computes LogP, TPSA, BR-SAScore, and Morgan
+        fingerprints in a single Mol-parsing pass.
+
     Parameters
     ----------
     logp_range : tuple[float, float]
@@ -47,9 +57,7 @@ class PhysChemScorer:
         self._logp_range = logp_range
         self._tpsa_range = tpsa_range
 
-    def __call__(
-        self, smiles: list[str], n_jobs: int = -1
-    ) -> PhysChemResult:
+    def __call__(self, smiles: list[str], n_jobs: int = -1) -> PhysChemResult:
         """Compute physicochemical properties for a list of SMILES.
 
         Parameters

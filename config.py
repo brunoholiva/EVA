@@ -31,7 +31,7 @@ class ArchiveConfig:
         if not any(self.dimension_enabled):
             raise ValueError("archive must enable at least one dimension")
 
-        valid_names = {"br_sascore", "ad", "novelty", "logp", "tpsa"}
+        valid_names = {"br_sascore", "ad", "novelty", "logp", "tpsa", "mw"}
         invalid_names = [name for name in self.dimension_names if name not in valid_names]
         if invalid_names:
             raise ValueError(

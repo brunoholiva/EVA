@@ -44,9 +44,51 @@ class ADScorer:
         RDLogger.DisableLog("rdApp.*")
 
     @property
+    def radius(self) -> int:
+        """Morgan fingerprint radius used by this scorer."""
+        return self._radius
+
+    @property
+    def n_bits(self) -> int:
+        """Number of bits in the Morgan fingerprint."""
+        return self._n_bits
+
+    @property
+    def n_neighbors(self) -> int:
+        """Number of nearest neighbors used for AD scoring."""
+        return self._n_neighbors
+
+    @property
+    def train_fps(self) -> np.ndarray:
+        """Training set fingerprints (``(n_train, n_bits)`` float32)."""
+        return self._train_fps
+
+    @property
+    def train_sum(self) -> np.ndarray:
+        """Precomputed row sums of *train_fps* (``(n_train,)`` float32)."""
+        return self._train_sum
+
+    @property
     def n_features(self) -> int:
         """Number of bits in the Morgan fingerprint."""
         return self._n_bits
+
+    def compute_from_fps(self, fps: np.ndarray) -> np.ndarray:
+        """Compute AD scores from pre-computed Morgan fingerprints.
+
+        Parameters
+        ----------
+        fps : np.ndarray of shape ``(n, n_bits)``
+            Morgan fingerprints for valid query molecules (float32).
+
+        Returns
+        -------
+        np.ndarray of shape ``(n,)``
+            Mean Tanimoto distance to k nearest training neighbors.
+        """
+        return batch_tanimoto_topk(
+            fps, self._train_fps, self._train_sum, self._n_neighbors
+        )
 
     def __call__(self, smiles: list[str]) -> np.ndarray:
         """Score a batch of SMILES strings.
@@ -70,9 +112,7 @@ class ADScorer:
         if len(fps) == 0:
             return scores
 
-        dist = batch_tanimoto_topk(
-            fps, self._train_fps, self._train_sum, self._n_neighbors
-        )
+        dist = self.compute_from_fps(fps)
         for i, d in zip(valid_idx, dist):
             scores[i] = d
         return scores

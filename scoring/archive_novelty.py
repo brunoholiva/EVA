@@ -190,6 +190,52 @@ class ArchiveNoveltyScorer:
         scorer._rebuild_arrays()
         return scorer
 
+    @property
+    def radius(self) -> int:
+        """Morgan fingerprint radius used by this scorer."""
+        return self._radius
+
+    @property
+    def n_bits(self) -> int:
+        """Morgan fingerprint bit length."""
+        return self._n_bits
+
+    @property
+    def n_neighbors(self) -> int:
+        """Number of nearest neighbors used for novelty scoring."""
+        return self._n_neighbors
+
+    @property
+    def cache_fps(self) -> np.ndarray:
+        """Archive fingerprint cache (``(n_cache, n_bits)`` float32)."""
+        return self._cache
+
+    @property
+    def cache_sums(self) -> np.ndarray:
+        """Precomputed row sums of *cache_fps* (``(n_cache,)`` float32)."""
+        return self._cache_sums
+
+    def compute_from_fps(self, fps: np.ndarray) -> np.ndarray:
+        """Compute novelty scores from pre-computed Morgan fingerprints.
+
+        Parameters
+        ----------
+        fps : np.ndarray of shape ``(n, n_bits)``
+            Morgan fingerprints for valid query molecules (float32).
+
+        Returns
+        -------
+        np.ndarray of shape ``(n,)``
+            Mean Tanimoto distance to k nearest archive neighbors.
+            Returns all-ones if the cache is empty.
+        """
+        if len(self._cache) == 0:
+            return np.ones(len(fps), dtype=np.float32)
+
+        return batch_tanimoto_topk(
+            fps, self._cache, self._cache_sums, self._n_neighbors
+        )
+
     def __call__(self, smiles: list[str]) -> np.ndarray:
         """Score a batch of SMILES strings.
 
@@ -215,10 +261,7 @@ class ArchiveNoveltyScorer:
         if len(fps) == 0:
             return scores
 
-        dist = batch_tanimoto_topk(
-            fps, self._cache, self._cache_sums, self._n_neighbors
-        )
-
+        dist = self.compute_from_fps(fps)
         for i, d in zip(valid_idx, dist):
             scores[i] = d
         return scores

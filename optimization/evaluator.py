@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import time
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
@@ -13,22 +12,30 @@ from joblib import Parallel, delayed
 from rdkit import Chem
 
 from optimization.constants import INVALID_MOLECULE_OBJECTIVE
-from scoring.br_sascore import compute_br_sascore_batch
-from scoring.ad_scorer import ADScorer
-from scoring.archive_novelty import ArchiveNoveltyScorer
-from scoring.physchem import PhysChemScorer
 
 MAX_SELFIES_TOKENS = 200
 
 if TYPE_CHECKING:
     from config import ArchiveConfig
-    from featurization.features import MoleculeFeaturizer
+    from scoring.ad_scorer import ADScorer
+    from scoring.archive_novelty import ArchiveNoveltyScorer
 
 
 class MolecularScorer(Protocol):
     """Anything that scores a list of SMILES and returns a numeric array."""
 
     def __call__(self, smiles: list[str]) -> np.ndarray: ...
+
+
+@dataclass
+class EvalTimings:
+    """Per-generation timing breakdown."""
+
+    decode: float = 0.0
+    validity: float = 0.0
+    featurize_predict: float = 0.0
+    cpu_scorers: float = 0.0
+    assemble: float = 0.0
 
 
 @dataclass
@@ -44,8 +51,10 @@ class EvalResult:
     archive_novelty: np.ndarray
     logp: np.ndarray
     tpsa: np.ndarray
+    mw: np.ndarray
     n_valid: int
     gen_time: float
+    timings: EvalTimings = field(default_factory=EvalTimings)
 
 
 class Evaluator:
@@ -60,10 +69,9 @@ class Evaluator:
         Applicability-domain scorer (distance to training set).
     archive_novelty : ArchiveNoveltyScorer
         Structural diversity scorer (distance to archive members).
-    physchem : PhysChemScorer
-        Physicochemical property scorer (LogP, TPSA).
     activity : callable
-        Function ``(smiles, model, featurizer) -> (preds, probs)``.
+        Function ``(X, model) -> (preds, probs)`` that predicts from
+        pre-featurized features (``predict_from_features``).
     activity_model : fitted TabPFNClassifier
         Activity predictor.
     featurizer : MoleculeFeaturizer
@@ -77,7 +85,6 @@ class Evaluator:
         decode,
         ad: ADScorer,
         archive_novelty: ArchiveNoveltyScorer,
-        physchem: PhysChemScorer,
         activity,
         activity_model,
         featurizer,
@@ -86,7 +93,6 @@ class Evaluator:
         self._decode_fn = decode
         self._ad = ad
         self._archive_novelty = archive_novelty
-        self._physchem = physchem
         self._activity_fn = activity
         self._activity_model = activity_model
         self._featurizer = featurizer
@@ -118,47 +124,104 @@ class Evaluator:
         EvalResult
             Objectives (P(active)), behavior coords, and metadata.
         """
+        timings = EvalTimings()
         t0 = time.time()
         n = len(z)
 
+        t1 = time.time()
         smiles_list = self._decode_fn(z)
+        timings.decode = time.time() - t1
+
+        t1 = time.time()
         valid_mask = _validity_mask(smiles_list)
+        timings.validity = time.time() - t1
         valid_smiles = [s for s, v in zip(smiles_list, valid_mask) if v]
 
-        scores = self._score_valid(valid_smiles)
+        scores = self._score_valid(valid_smiles, timings)
         result = self._assemble(n, valid_mask, smiles_list, scores)
 
         result.gen_time = time.time() - t0
+        result.timings = timings
         return result
 
-    def _score_valid(self, valid_smiles: list[str]) -> _ScoreBundle | None:
+    def _score_valid(
+        self, valid_smiles: list[str], timings: EvalTimings
+    ) -> _ScoreBundle | None:
         """Score valid SMILES with all scorers.
 
-        CPU-bound scorers (BR-SAScore, AD, PhysChem) run concurrently
-        with GPU-bound TabPFN via ThreadPoolExecutor.
+        Phase 1: Featurization (CPU-heavy, all cores).
+        Phase 2: CPU scorers (MolBehavior + Tanimoto distances) run
+            concurrently with GPU-bound TabPFN prediction.
         """
         if not valid_smiles:
             return None
 
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            br_future = pool.submit(compute_br_sascore_batch, valid_smiles)
-            ad_future = pool.submit(self._ad, valid_smiles)
-            nov_future = pool.submit(self._archive_novelty, valid_smiles)
-            phys_future = pool.submit(self._physchem, valid_smiles)
-            _, probs = self._activity_fn(
-                valid_smiles, self._activity_model, self._featurizer
-            )
+        # Phase 1: featurization only (descriptastorus is the bottleneck)
+        t1 = time.time()
+        X = self._featurizer.transform(valid_smiles)
+        timings.featurize_predict = time.time() - t1
 
-            br = br_future.result()
-            ad = ad_future.result()
-            nov = nov_future.result()
-            phys = phys_future.result()
+        # Phase 2: CPU scorers + TabPFN GPU concurrently
+        t1 = time.time()
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            cpu_future = pool.submit(self._compute_cpu_scores, valid_smiles)
+            _, probs = self._activity_fn(X, self._activity_model)
+            br, logp, tpsa, ad, nov, mw = cpu_future.result()
+
+        timings.cpu_scorers = time.time() - t1
 
         pa = probs[:, 1]
+        return _ScoreBundle(br=br, ad=ad, nov=nov, logp=logp, tpsa=tpsa, mw=mw, pa=pa)
 
-        return _ScoreBundle(
-            br=br, ad=ad, nov=nov, logp=phys.logp, tpsa=phys.tpsa, pa=pa
+    def _compute_cpu_scores(
+        self, valid_smiles: list[str]
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Compute all CPU-bound molecular scores for valid SMILES.
+
+        Delegates per-molecule properties (BR-SAScore, LogP, TPSA, MW, Morgan FP)
+        to :func:`batch_molecule_behaviors`, then passes the fingerprints
+        to AD and archive novelty scorers via their public APIs.
+
+        Parameters
+        ----------
+        valid_smiles : list of str
+            SMILES strings known to be chemically valid.
+
+        Returns
+        -------
+        br : np.ndarray
+            BR-SAScore values (NaN for molecules that failed scoring).
+        logp : np.ndarray
+            LogP values.
+        tpsa : np.ndarray
+            TPSA values.
+        ad : np.ndarray
+            AD Tanimoto distances (1.0 if no training set).
+        nov : np.ndarray
+            Archive novelty distances (1.0 if no cache).
+        mw : np.ndarray
+            Molecular weight values (NaN for molecules that failed scoring).
+        """
+        from scoring.molecule_behavior import batch_molecule_behaviors
+
+        br, logp, tpsa, mw, fps, valid_fp_mask = batch_molecule_behaviors(
+            valid_smiles,
+            self._ad.radius,
+            self._ad.n_bits,
         )
+
+        ad = np.ones(len(valid_smiles), dtype=np.float32)
+        nov = np.ones(len(valid_smiles), dtype=np.float32)
+
+        if fps is not None and len(fps) > 0:
+            ad_dist = self._ad.compute_from_fps(fps)
+            nov_dist = self._archive_novelty.compute_from_fps(fps)
+            ad[valid_fp_mask] = ad_dist
+            nov[valid_fp_mask] = nov_dist
+
+        return br, logp, tpsa, ad, nov, mw
 
     def _assemble(
         self,
@@ -177,6 +240,7 @@ class Evaluator:
         nov_arr = np.ones(n, dtype=np.float64)
         logp_arr = np.full(n, np.nan, dtype=np.float64)
         tpsa_arr = np.full(n, np.nan, dtype=np.float64)
+        mw_arr = np.full(n, np.nan, dtype=np.float64)
 
         if scores is None:
             return EvalResult(
@@ -189,6 +253,7 @@ class Evaluator:
                 archive_novelty=nov_arr,
                 logp=logp_arr,
                 tpsa=tpsa_arr,
+                mw=mw_arr,
                 n_valid=int(valid_mask.sum()),
                 gen_time=0.0,
             )
@@ -199,6 +264,7 @@ class Evaluator:
             "novelty": scores.nov,
             "logp": scores.logp,
             "tpsa": scores.tpsa,
+            "mw": scores.mw,
         }
 
         j = 0
@@ -219,6 +285,7 @@ class Evaluator:
             nov_arr[i] = scores.nov[j]
             logp_arr[i] = scores.logp[j]
             tpsa_arr[i] = scores.tpsa[j]
+            mw_arr[i] = scores.mw[j]
             j += 1
 
         return EvalResult(
@@ -231,6 +298,7 @@ class Evaluator:
             archive_novelty=nov_arr,
             logp=logp_arr,
             tpsa=tpsa_arr,
+            mw=mw_arr,
             n_valid=int(valid_mask.sum()),
             gen_time=0.0,
         )
@@ -245,6 +313,7 @@ class _ScoreBundle:
     nov: np.ndarray
     logp: np.ndarray
     tpsa: np.ndarray
+    mw: np.ndarray
     pa: np.ndarray
 
 

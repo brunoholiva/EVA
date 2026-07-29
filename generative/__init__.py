@@ -41,6 +41,7 @@ class ChemBedVAE:
             device=self._device, repo_id=model_repo_id
         )
         self._vae.eval()
+        torch.set_float32_matmul_precision("high")
 
     @property
     def latent_dim(self) -> int:
@@ -108,9 +109,11 @@ class ChemBedVAE:
             return []
 
         z_tensor = torch.as_tensor(z, dtype=torch.float32).unsqueeze(1)
-        selfies_list = dec.decode_zs_to_selfies(
-            z_tensor, self._vae, batch_size=batch_size
-        )
+        device_type = "cuda" if self._device.type == "cuda" else "cpu"
+        with torch.amp.autocast(device_type=device_type, dtype=torch.bfloat16):
+            selfies_list = dec.decode_zs_to_selfies(
+                z_tensor, self._vae, batch_size=batch_size
+            )
 
         result: list[str] = []
         for s in selfies_list:
