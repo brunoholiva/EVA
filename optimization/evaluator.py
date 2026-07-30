@@ -84,11 +84,11 @@ class Evaluator:
         self,
         decode,
         ad: ADScorer,
-        archive_novelty: ArchiveNoveltyScorer,
-        activity,
-        activity_model,
-        featurizer,
-        archive_cfg: ArchiveConfig,
+        archive_novelty: ArchiveNoveltyScorer | None = None,
+        activity=None,
+        activity_model=None,
+        featurizer=None,
+        archive_cfg: ArchiveConfig | None = None,
     ) -> None:
         self._decode_fn = decode
         self._ad = ad
@@ -100,6 +100,10 @@ class Evaluator:
         self._enabled_indices = [
             i for i, e in enumerate(archive_cfg.dimension_enabled) if e
         ]
+        enabled = dict(zip(archive_cfg.dimension_names, archive_cfg.dimension_enabled))
+        self._br_sascore_enabled = enabled.get("br_sascore", True)
+        self._ad_enabled = enabled.get("ad", True)
+        self._novelty_enabled = enabled.get("novelty", True)
 
     @property
     def decode_fn(self):
@@ -107,8 +111,8 @@ class Evaluator:
         return self._decode_fn
 
     @property
-    def archive_novelty(self) -> ArchiveNoveltyScorer:
-        """Return the novelty scorer used by this evaluator."""
+    def archive_novelty(self) -> ArchiveNoveltyScorer | None:
+        """Return the novelty scorer used by this evaluator, or None if disabled."""
         return self._archive_novelty
 
     def __call__(self, z: np.ndarray) -> EvalResult:
@@ -178,11 +182,12 @@ class Evaluator:
     def _compute_cpu_scores(
         self, valid_smiles: list[str]
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Compute all CPU-bound molecular scores for valid SMILES.
+        """Compute CPU-bound molecular scores for valid SMILES.
 
         Delegates per-molecule properties (BR-SAScore, LogP, TPSA, MW, Morgan FP)
         to :func:`batch_molecule_behaviors`, then passes the fingerprints
         to AD and archive novelty scorers via their public APIs.
+        Skips computations for disabled dimensions.
 
         Parameters
         ----------
@@ -210,16 +215,19 @@ class Evaluator:
             valid_smiles,
             self._ad.radius,
             self._ad.n_bits,
+            compute_br_sascore=self._br_sascore_enabled,
         )
 
         ad = np.ones(len(valid_smiles), dtype=np.float32)
         nov = np.ones(len(valid_smiles), dtype=np.float32)
 
         if fps is not None and len(fps) > 0:
-            ad_dist = self._ad.compute_from_fps(fps)
-            nov_dist = self._archive_novelty.compute_from_fps(fps)
-            ad[valid_fp_mask] = ad_dist
-            nov[valid_fp_mask] = nov_dist
+            if self._ad_enabled:
+                ad_dist = self._ad.compute_from_fps(fps)
+                ad[valid_fp_mask] = ad_dist
+            if self._novelty_enabled and self._archive_novelty is not None:
+                nov_dist = self._archive_novelty.compute_from_fps(fps)
+                nov[valid_fp_mask] = nov_dist
 
         return br, logp, tpsa, ad, nov, mw
 
@@ -271,7 +279,7 @@ class Evaluator:
         for i in range(n):
             if not valid_mask[i]:
                 continue
-            if np.isnan(scores.br[j]):
+            if self._br_sascore_enabled and np.isnan(scores.br[j]):
                 j += 1
                 continue
 

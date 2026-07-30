@@ -46,6 +46,7 @@ def compute_molecule_behavior(
     smi: str,
     radius: int = 2,
     n_bits: int = 2048,
+    compute_br_sascore: bool = True,
 ) -> MolBehavior:
     """Compute per-molecule properties from a SMILES string.
 
@@ -57,6 +58,8 @@ def compute_molecule_behavior(
         Morgan fingerprint radius.
     n_bits : int, default=2048
         Morgan fingerprint bit length.
+    compute_br_sascore : bool, default=True
+        If ``False``, skip BR-SAScore computation (leaves it as NaN).
 
     Returns
     -------
@@ -71,9 +74,12 @@ def compute_molecule_behavior(
     if mol is None:
         return MolBehavior(float("nan"), float("nan"), float("nan"), float("nan"), None)
 
-    try:
-        br, _ = _get_scorer().calculateScore(smi)
-    except Exception:
+    if compute_br_sascore:
+        try:
+            br, _ = _get_scorer().calculateScore(smi)
+        except Exception:
+            br = float("nan")
+    else:
         br = float("nan")
 
     logp = Descriptors.MolLogP(mol)
@@ -89,7 +95,10 @@ def batch_molecule_behaviors(
     radius: int = 2,
     n_bits: int = 2048,
     n_jobs: int = -1,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray]:
+    compute_br_sascore: bool = True,
+) -> tuple[
+    np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray
+]:
     """Compute MolBehavior for a batch of SMILES in parallel.
 
     Parameters
@@ -102,6 +111,8 @@ def batch_molecule_behaviors(
         Morgan fingerprint bit length.
     n_jobs : int, default=-1
         Number of parallel workers. -1 uses all CPUs.
+    compute_br_sascore : bool, default=True
+        If ``False``, skip BR-SAScore computation in each worker.
 
     Returns
     -------
@@ -120,7 +131,8 @@ def batch_molecule_behaviors(
         fingerprint (used for mapping Tanimoto results back).
     """
     results = Parallel(n_jobs=n_jobs, prefer="processes")(
-        delayed(compute_molecule_behavior)(smi, radius, n_bits) for smi in smiles
+        delayed(compute_molecule_behavior)(smi, radius, n_bits, compute_br_sascore)
+        for smi in smiles
     )
 
     n = len(smiles)
