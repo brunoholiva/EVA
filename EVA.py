@@ -69,12 +69,16 @@ def _load_scorers(cfg: ExperimentConfig):
         model_path=cfg.ad.ad_model_path,
         n_neighbors=cfg.ad.n_neighbors,
     )
-    archive_novelty = ArchiveNoveltyScorer(
-        n_bits=cfg.novelty.n_bits,
-        radius=cfg.novelty.radius,
-        max_cache_size=cfg.novelty.max_cache_size,
-        n_neighbors=cfg.novelty.n_neighbors,
-    )
+    novelty_enabled = "novelty" in cfg.archive.active_dimension_names()
+    if novelty_enabled:
+        archive_novelty: ArchiveNoveltyScorer | None = ArchiveNoveltyScorer(
+            n_bits=cfg.novelty.n_bits,
+            radius=cfg.novelty.radius,
+            max_cache_size=cfg.novelty.max_cache_size,
+            n_neighbors=cfg.novelty.n_neighbors,
+        )
+    else:
+        archive_novelty = None
     tabpfn = load_tabpfn(
         path=cfg.activity.model_path,
         device=cfg.activity.device,
@@ -88,13 +92,14 @@ def _run_loop(
     loop: CMAMAELoop,
     cfg: ExperimentConfig,
     output_dir: Path,
-    archive_novelty: ArchiveNoveltyScorer,
+    archive_novelty: ArchiveNoveltyScorer | None,
     tb_logger: TensorBoardLogger,
     start_gen: int = 0,
 ) -> None:
     """Run the CMA-MAE loop with a progress bar and periodic saves."""
     eval_every = cfg.run.eval_every
     n_gen = cfg.run.n_generations
+    novelty_enabled = archive_novelty is not None
 
     columns = [
         TextColumn("[progress.description]{task.description}"),
@@ -102,36 +107,44 @@ def _run_loop(
         TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
         TextColumn("•"),
         TextColumn("{task.fields[archive_size]} cells"),
-        TextColumn("•"),
-        TextColumn("{task.fields[cache_size]} cache"),
-        TextColumn("•"),
-        TimeRemainingColumn(),
     ]
+    if novelty_enabled:
+        columns += [
+            TextColumn("•"),
+            TextColumn("{task.fields[cache_size]} cache"),
+        ]
+    columns.append(TimeRemainingColumn())
 
     with Progress(*columns, console=console) as progress:
+        task_kw = dict(
+            archive_size=len(loop.archive),
+        )
+        if novelty_enabled:
+            task_kw["cache_size"] = archive_novelty.cache_size
         task = progress.add_task(
             "CMA-MAE",
             total=n_gen,
             completed=start_gen,
-            archive_size=len(loop.archive),
-            cache_size=archive_novelty.cache_size,
+            **task_kw,
         )
 
         def _on_step(gen, result, archive):
             """Update progress bar every generation."""
-            progress.update(
-                task,
+            update_kw = dict(
                 completed=gen + 1,
                 archive_size=len(archive),
-                cache_size=archive_novelty.cache_size,
             )
+            if novelty_enabled:
+                update_kw["cache_size"] = archive_novelty.cache_size
+            progress.update(task, **update_kw)
             tb_logger.log_generation(
                 step=gen,
                 result=result,
                 archive=archive,
                 result_archive=loop.result_archive,
-                cache_size=archive_novelty.cache_size,
                 dimension_names=cfg.archive.active_dimension_names(),
+                insertion_stats=loop.last_insertion_stats,
+                emitter_stats=loop.last_emitter_stats,
             )
 
         def _on_progress(gen, result, archive):
@@ -145,7 +158,8 @@ def _run_loop(
                         f"feat={t.featurize_predict:.1f}s cpu={t.cpu_scorers:.1f}s"
                     )
                 save_scheduler(loop.scheduler, output_dir)
-                save_archive_novelty_cache(archive_novelty, output_dir)
+                if novelty_enabled:
+                    save_archive_novelty_cache(archive_novelty, output_dir)
 
         loop.run(
             n_generations=n_gen,
@@ -182,25 +196,28 @@ def main(argv: list[str | None] | None = None) -> None:
         archive_cfg=cfg.archive,
     )
 
+    novelty_enabled = archive_novelty is not None
+
     if resume_from:
         console.rule("[bold green]Resuming CMA-MAE")
         scheduler = load_scheduler(resume_from)
         start_gen = scheduler.emitters[0]._itrs
         console.print(f"  Resuming from generation {start_gen}")
 
-        cache_path = Path(resume_from).parent / "archive_novelty_cache.joblib"
-        restored = load_archive_novelty_cache(
-            cache_path,
-            n_bits=cfg.novelty.n_bits,
-            radius=cfg.novelty.radius,
-            max_cache_size=cfg.novelty.max_cache_size,
-            n_neighbors=cfg.novelty.n_neighbors,
-        )
-        if restored.cache_size == 0 and len(scheduler.archive) > 0:
-            console.print("  Rebuilding archive novelty cache from archive ...")
-            _rebuild_novelty_cache(scheduler.archive, vae.decode, archive_novelty)
-        else:
-            archive_novelty.restore(restored)
+        if novelty_enabled:
+            cache_path = Path(resume_from).parent / "archive_novelty_cache.joblib"
+            restored = load_archive_novelty_cache(
+                cache_path,
+                n_bits=cfg.novelty.n_bits,
+                radius=cfg.novelty.radius,
+                max_cache_size=cfg.novelty.max_cache_size,
+                n_neighbors=cfg.novelty.n_neighbors,
+            )
+            if restored.cache_size == 0 and len(scheduler.archive) > 0:
+                console.print("  Rebuilding archive novelty cache from archive ...")
+                _rebuild_novelty_cache(scheduler.archive, vae.decode, archive_novelty)
+            else:
+                archive_novelty.restore(restored)
     else:
         scheduler = build_scheduler(cfg.archive, cfg.emitter, cfg.run.seed)
         start_gen = 0
@@ -215,7 +232,8 @@ def main(argv: list[str | None] | None = None) -> None:
         console.print(
             f"  Seeded archive with {result.n_valid}/{len(z_seeds)} valid molecules"
         )
-        _rebuild_novelty_cache(loop.archive, vae.decode, archive_novelty)
+        if novelty_enabled:
+            _rebuild_novelty_cache(loop.archive, vae.decode, archive_novelty)
 
     try:
         console.rule("[bold green]Running CMA-MAE")
@@ -249,7 +267,8 @@ def main(argv: list[str | None] | None = None) -> None:
                 dimension_names=cfg.archive.active_dimension_names(),
             )
         save_scheduler(loop.scheduler, output_dir)
-        save_archive_novelty_cache(archive_novelty, output_dir)
+        if novelty_enabled:
+            save_archive_novelty_cache(archive_novelty, output_dir)
         visualize_archive(
             loop.archive,
             output_dir,

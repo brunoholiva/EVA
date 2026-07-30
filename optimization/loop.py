@@ -93,6 +93,8 @@ class CMAMAELoop:
         self._evaluate = evaluate
         self._archive: GridArchive = scheduler.archive
         self._result_archive: GridArchive | None = scheduler.result_archive
+        self.last_insertion_stats: dict[str, int] | None = None
+        self.last_emitter_stats: list[dict] | None = None
 
     @property
     def archive(self) -> GridArchive:
@@ -166,11 +168,19 @@ class CMAMAELoop:
 
             z = self._scheduler.ask()
             result = self._evaluate(z)
+
+            old_occupied = self._get_occupied_cells(self._archive)
             self._scheduler.tell(result.objectives, result.measures)
 
-            self._sync_novelty_cache(
-                old_primary, old_result, archive_novelty, decode_fn
+            self.last_insertion_stats = self._compute_insertion_stats(
+                result, len(z), old_occupied
             )
+            self.last_emitter_stats = self._compute_emitter_stats()
+
+            if archive_novelty is not None:
+                self._sync_novelty_cache(
+                    old_primary, old_result, archive_novelty, decode_fn
+                )
 
             if on_step:
                 on_step(gen, result, self._archive)
@@ -193,6 +203,71 @@ class CMAMAELoop:
             result = set(self._result_archive.data()["index"].tolist())
 
         return primary, result
+
+    def _get_occupied_cells(self, archive: GridArchive) -> dict[int, float]:
+        """Return ``{cell_index: objective}`` for all occupied cells."""
+        occupied: dict[int, float] = {}
+        if len(archive) > 0:
+            data = archive.data()
+            for idx, obj in zip(data["index"], data["objective"]):
+                occupied[int(idx)] = float(obj)
+        return occupied
+
+    def _compute_insertion_stats(
+        self, result: EvalResult, n_total: int, old_occupied: dict[int, float]
+    ) -> dict[str, int]:
+        """Categorise each candidate's archive insertion outcome."""
+        inserted_new = 0
+        improved_existing = 0
+        rejected = 0
+
+        lb = self._archive.lower_bounds
+        ub = self._archive.upper_bounds
+        n_dims = self._archive.measure_dim
+        all_indices = self._archive.index_of(result.measures)
+
+        for i in range(n_total):
+            if result.objectives[i] == INVALID_MOLECULE_OBJECTIVE:
+                rejected += 1
+                continue
+
+            meas = result.measures[i]
+            in_bounds = True
+            for d in range(n_dims):
+                if meas[d] < lb[d] or meas[d] > ub[d]:
+                    in_bounds = False
+                    break
+            if not in_bounds:
+                rejected += 1
+                continue
+
+            cell_idx = int(all_indices[i])
+            if cell_idx not in old_occupied:
+                inserted_new += 1
+            elif result.objectives[i] > old_occupied[cell_idx]:
+                improved_existing += 1
+            else:
+                rejected += 1
+
+        return {
+            "inserted_new": inserted_new,
+            "improved_existing": improved_existing,
+            "rejected": rejected,
+        }
+
+    def _compute_emitter_stats(self) -> list[dict]:
+        """Return per-emitter distance and restart count."""
+        stats = []
+        for i, emitter in enumerate(self._scheduler._emitters):
+            dist = np.linalg.norm(emitter._opt.mean - emitter.x0)
+            stats.append(
+                {
+                    "id": i,
+                    "distance": float(dist),
+                    "restarts": emitter.restarts,
+                }
+            )
+        return stats
 
     def _sync_novelty_cache(
         self,

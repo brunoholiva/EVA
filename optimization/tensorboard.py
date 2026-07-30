@@ -39,8 +39,6 @@ class TensorBoardLogger:
     def __init__(self, cfg: TensorBoardConfig, output_dir: str | Path) -> None:
         self._cfg = cfg
         self._writer = None
-        self._last_coverage: float | None = None
-        self._last_num_elites: int | None = None
 
         if not cfg.enabled:
             return
@@ -74,8 +72,9 @@ class TensorBoardLogger:
         result: EvalResult,
         archive: GridArchive,
         result_archive: GridArchive | None,
-        cache_size: int,
         dimension_names: list[str],
+        insertion_stats: dict[str, int] | None = None,
+        emitter_stats: list[dict] | None = None,
     ) -> None:
         """Log generation metrics to TensorBoard."""
         if self._writer is None:
@@ -84,9 +83,12 @@ class TensorBoardLogger:
         report_archive = result_archive if result_archive is not None else archive
 
         if step % self._cfg.scalar_every == 0:
-            self._log_archive_stats("result_archive", report_archive, step)
-            self._log_archive_stats("archive", archive, step)
-            self._log_eval_stats(result, cache_size, step)
+            self._log_result_archive_stats(report_archive, step)
+            self._log_eval_stats(result, step)
+            if insertion_stats is not None:
+                self._log_insertion_stats(insertion_stats, step)
+            if emitter_stats is not None:
+                self._log_emitter_stats(emitter_stats, step)
 
         if step % self._cfg.histogram_every == 0:
             self._log_archive_histograms(report_archive, dimension_names, step)
@@ -102,36 +104,25 @@ class TensorBoardLogger:
             return
         self._writer.close()
 
-    def _log_archive_stats(self, prefix: str, archive: GridArchive, step: int) -> None:
-        """Log scalar stats from a pyribs archive."""
+    def _log_result_archive_stats(self, archive: GridArchive, step: int) -> None:
+        """Log archive-level stats (result archive only)."""
         stats = archive.stats
-        self._writer.add_scalar(f"{prefix}/coverage", float(stats.coverage), step)
-        self._writer.add_scalar(f"{prefix}/num_elites", int(stats.num_elites), step)
-        self._writer.add_scalar(f"{prefix}/qd_score", float(stats.qd_score), step)
+        self._writer.add_scalar("result_archive/coverage", float(stats.coverage), step)
         self._writer.add_scalar(
-            f"{prefix}/norm_qd_score", float(stats.norm_qd_score), step
+            "result_archive/num_elites", int(stats.num_elites), step
         )
+        self._writer.add_scalar("result_archive/qd_score", float(stats.qd_score), step)
 
         if stats.obj_max is not None:
-            self._writer.add_scalar(f"{prefix}/obj_max", float(stats.obj_max), step)
+            self._writer.add_scalar(
+                "result_archive/obj_max", float(stats.obj_max), step
+            )
         if stats.obj_mean is not None:
-            self._writer.add_scalar(f"{prefix}/obj_mean", float(stats.obj_mean), step)
+            self._writer.add_scalar(
+                "result_archive/obj_mean", float(stats.obj_mean), step
+            )
 
-        if prefix == "result_archive":
-            coverage_delta = 0.0
-            if self._last_coverage is not None:
-                coverage_delta = float(stats.coverage) - self._last_coverage
-            elite_delta = 0
-            if self._last_num_elites is not None:
-                elite_delta = int(stats.num_elites) - self._last_num_elites
-
-            self._writer.add_scalar(f"{prefix}/coverage_delta", coverage_delta, step)
-            self._writer.add_scalar(f"{prefix}/num_elites_delta", elite_delta, step)
-
-            self._last_coverage = float(stats.coverage)
-            self._last_num_elites = int(stats.num_elites)
-
-    def _log_eval_stats(self, result: EvalResult, cache_size: int, step: int) -> None:
+    def _log_eval_stats(self, result: EvalResult, step: int) -> None:
         """Log batch-level evaluation stats."""
         valid_fraction = 0.0
         if len(result.objectives) > 0:
@@ -140,7 +131,6 @@ class TensorBoardLogger:
         self._writer.add_scalar("eval/n_valid", result.n_valid, step)
         self._writer.add_scalar("eval/valid_fraction", valid_fraction, step)
         self._writer.add_scalar("eval/gen_time_sec", result.gen_time, step)
-        self._writer.add_scalar("system/novelty_cache_size", cache_size, step)
 
         active = result.p_active[result.p_active > 0]
         if len(active) > 0:
@@ -150,6 +140,23 @@ class TensorBoardLogger:
             self._writer.add_scalar(
                 "eval/mean_p_active_batch", float(active.mean()), step
             )
+
+    def _log_insertion_stats(self, stats: dict[str, int], step: int) -> None:
+        """Log per-generation archive insertion outcomes."""
+        self._writer.add_scalar("insertion/inserted_new", stats["inserted_new"], step)
+        self._writer.add_scalar(
+            "insertion/improved_existing", stats["improved_existing"], step
+        )
+        self._writer.add_scalar("insertion/rejected", stats["rejected"], step)
+
+    def _log_emitter_stats(self, stats: list[dict], step: int) -> None:
+        """Log per-emitter statistics (distance, restarts)."""
+        for es in stats:
+            i = es["id"]
+            self._writer.add_scalar(
+                f"emitter/{i}/distance", float(es["distance"]), step
+            )
+            self._writer.add_scalar(f"emitter/{i}/restarts", int(es["restarts"]), step)
 
     def _log_archive_histograms(
         self, archive: GridArchive, dimension_names: list[str], step: int
