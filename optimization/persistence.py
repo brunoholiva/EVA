@@ -1,4 +1,4 @@
-"""State persistence: save and load scheduler, archive, and archive novelty cache."""
+"""State persistence: save and load scheduler and archive."""
 
 from __future__ import annotations
 
@@ -7,12 +7,11 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
-from rich.console import Console
 from ribs.archives import GridArchive
 from ribs.schedulers import Scheduler
+from rich.console import Console
 
 from optimization.reporting import _rank_archive
-from scoring.archive_novelty import ArchiveNoveltyScorer
 
 console = Console()
 
@@ -145,72 +144,3 @@ def load_scheduler(path: str | Path) -> Scheduler:
     scheduler: Scheduler = joblib.load(path)
     console.print(f"Loaded scheduler from {path} ({len(scheduler.archive)} cells)")
     return scheduler
-
-
-def save_archive_novelty_cache(
-    scorer: ArchiveNoveltyScorer,
-    output_dir: str | Path,
-) -> Path:
-    """Persist the archive novelty scorer's fingerprint cache.
-
-    Parameters
-    ----------
-    scorer : ArchiveNoveltyScorer
-        Scorer whose cache to save.
-    output_dir : str or Path
-        Directory to write ``archive_novelty_cache.joblib``.
-
-    Returns
-    -------
-    Path
-        Path to the saved file.
-    """
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / "archive_novelty_cache.joblib"
-    scorer.save(path)
-    console.print(f"Saved archive novelty cache → {path}")
-    return path
-
-
-def load_archive_novelty_cache(
-    path: str | Path,
-    n_bits: int = 2048,
-    radius: int = 2,
-    max_cache_size: int = 5000,
-    n_neighbors: int = 5,
-) -> ArchiveNoveltyScorer:
-    """Load an archive novelty scorer from disk, or create an empty one.
-
-    Parameters
-    ----------
-    path : str or Path
-        Path to ``archive_novelty_cache.joblib``.
-    n_bits : int
-        Fallback fingerprint size if file doesn't exist.
-    radius : int
-        Fallback radius if file doesn't exist.
-    max_cache_size : int
-        Fallback max cache size if file doesn't exist.
-    n_neighbors : int
-        Fallback number of nearest neighbors if file doesn't exist.
-
-    Returns
-    -------
-    ArchiveNoveltyScorer
-        Scorer with restored (or empty) cache.
-    """
-    p = Path(path)
-    if p.exists():
-        scorer = ArchiveNoveltyScorer.load(p)
-        console.print(
-            f"Loaded archive novelty cache from {p} ({scorer.cache_size} fingerprints)"
-        )
-        return scorer
-    console.print("No archive novelty cache found — starting with empty cache")
-    return ArchiveNoveltyScorer(
-        n_bits=n_bits,
-        radius=radius,
-        max_cache_size=max_cache_size,
-        n_neighbors=n_neighbors,
-    )

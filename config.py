@@ -31,8 +31,10 @@ class ArchiveConfig:
         if not any(self.dimension_enabled):
             raise ValueError("archive must enable at least one dimension")
 
-        valid_names = {"br_sascore", "ad", "novelty", "logp", "tpsa", "mw"}
-        invalid_names = [name for name in self.dimension_names if name not in valid_names]
+        valid_names = {"br_sascore", "ad", "logp", "tpsa", "mw"}
+        invalid_names = [
+            name for name in self.dimension_names if name not in valid_names
+        ]
         if invalid_names:
             raise ValueError(
                 "archive dimension_names contain unsupported metrics: "
@@ -85,14 +87,6 @@ class ActivityConfig:
 
 
 @dataclass
-class NoveltyConfig:
-    n_neighbors: int = 5
-    n_bits: int = 2048
-    radius: int = 2
-    max_cache_size: int = 5000
-
-
-@dataclass
 class RunConfig:
     n_generations: int
     eval_every: int
@@ -104,6 +98,13 @@ class RunConfig:
 class OutputConfig:
     output_dir: str
     run_name: str
+
+
+@dataclass
+class PCALatentConfig:
+    path: str = "data/pca_latent.joblib"
+    enabled: bool = True
+    variance_threshold: float = 0.99
 
 
 @dataclass
@@ -122,9 +123,9 @@ class ExperimentConfig:
     generative: GenerativeConfig
     ad: ADConfig
     activity: ActivityConfig
-    novelty: NoveltyConfig
     run: RunConfig
     output: OutputConfig
+    pca: PCALatentConfig = field(default_factory=PCALatentConfig)
     tensorboard: TensorBoardConfig = field(default_factory=TensorBoardConfig)
 
     @classmethod
@@ -140,9 +141,9 @@ class ExperimentConfig:
             generative=GenerativeConfig(**raw.get("generative", {})),
             ad=ADConfig(**raw.get("ad", {})),
             activity=ActivityConfig(**raw.get("activity", {})),
-            novelty=NoveltyConfig(**raw.get("novelty", {})),
             run=RunConfig(**raw.get("run", {})),
             output=OutputConfig(**raw.get("output", output_defaults)),
+            pca=PCALatentConfig(**raw.get("pca", {})),
             tensorboard=TensorBoardConfig(**raw.get("tensorboard", {})),
         )
         config.archive.validate()

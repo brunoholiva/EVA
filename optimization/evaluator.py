@@ -18,7 +18,6 @@ MAX_SELFIES_TOKENS = 200
 if TYPE_CHECKING:
     from config import ArchiveConfig
     from scoring.ad_scorer import ADScorer
-    from scoring.archive_novelty import ArchiveNoveltyScorer
 
 
 class MolecularScorer(Protocol):
@@ -48,7 +47,6 @@ class EvalResult:
     p_active: np.ndarray
     br_sascore: np.ndarray
     ad: np.ndarray
-    archive_novelty: np.ndarray
     logp: np.ndarray
     tpsa: np.ndarray
     mw: np.ndarray
@@ -67,8 +65,6 @@ class Evaluator:
         vectors to SMILES.
     ad : ADScorer
         Applicability-domain scorer (distance to training set).
-    archive_novelty : ArchiveNoveltyScorer
-        Structural diversity scorer (distance to archive members).
     activity : callable
         Function ``(X, model) -> (preds, probs)`` that predicts from
         pre-featurized features (``predict_from_features``).
@@ -84,7 +80,6 @@ class Evaluator:
         self,
         decode,
         ad: ADScorer,
-        archive_novelty: ArchiveNoveltyScorer | None = None,
         activity=None,
         activity_model=None,
         featurizer=None,
@@ -92,7 +87,6 @@ class Evaluator:
     ) -> None:
         self._decode_fn = decode
         self._ad = ad
-        self._archive_novelty = archive_novelty
         self._activity_fn = activity
         self._activity_model = activity_model
         self._featurizer = featurizer
@@ -103,17 +97,11 @@ class Evaluator:
         enabled = dict(zip(archive_cfg.dimension_names, archive_cfg.dimension_enabled))
         self._br_sascore_enabled = enabled.get("br_sascore", True)
         self._ad_enabled = enabled.get("ad", True)
-        self._novelty_enabled = enabled.get("novelty", True)
 
     @property
     def decode_fn(self):
         """Return the latent-vector decoder used by this evaluator."""
         return self._decode_fn
-
-    @property
-    def archive_novelty(self) -> ArchiveNoveltyScorer | None:
-        """Return the novelty scorer used by this evaluator, or None if disabled."""
-        return self._archive_novelty
 
     def __call__(self, z: np.ndarray) -> EvalResult:
         """Score a batch of latent vectors.
@@ -172,21 +160,21 @@ class Evaluator:
         with ThreadPoolExecutor(max_workers=1) as pool:
             cpu_future = pool.submit(self._compute_cpu_scores, valid_smiles)
             _, probs = self._activity_fn(X, self._activity_model)
-            br, logp, tpsa, ad, nov, mw = cpu_future.result()
+            br, logp, tpsa, ad, mw = cpu_future.result()
 
         timings.cpu_scorers = time.time() - t1
 
         pa = probs[:, 1]
-        return _ScoreBundle(br=br, ad=ad, nov=nov, logp=logp, tpsa=tpsa, mw=mw, pa=pa)
+        return _ScoreBundle(br=br, ad=ad, logp=logp, tpsa=tpsa, mw=mw, pa=pa)
 
     def _compute_cpu_scores(
         self, valid_smiles: list[str]
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Compute CPU-bound molecular scores for valid SMILES.
 
         Delegates per-molecule properties (BR-SAScore, LogP, TPSA, MW, Morgan FP)
         to :func:`batch_molecule_behaviors`, then passes the fingerprints
-        to AD and archive novelty scorers via their public APIs.
+        to the AD scorer via its public API.
         Skips computations for disabled dimensions.
 
         Parameters
@@ -204,8 +192,6 @@ class Evaluator:
             TPSA values.
         ad : np.ndarray
             AD Tanimoto distances (1.0 if no training set).
-        nov : np.ndarray
-            Archive novelty distances (1.0 if no cache).
         mw : np.ndarray
             Molecular weight values (NaN for molecules that failed scoring).
         """
@@ -219,17 +205,13 @@ class Evaluator:
         )
 
         ad = np.ones(len(valid_smiles), dtype=np.float32)
-        nov = np.ones(len(valid_smiles), dtype=np.float32)
 
         if fps is not None and len(fps) > 0:
             if self._ad_enabled:
                 ad_dist = self._ad.compute_from_fps(fps)
                 ad[valid_fp_mask] = ad_dist
-            if self._novelty_enabled and self._archive_novelty is not None:
-                nov_dist = self._archive_novelty.compute_from_fps(fps)
-                nov[valid_fp_mask] = nov_dist
 
-        return br, logp, tpsa, ad, nov, mw
+        return br, logp, tpsa, ad, mw
 
     def _assemble(
         self,
@@ -245,7 +227,6 @@ class Evaluator:
         p_active = np.zeros(n, dtype=np.float64)
         br_arr = np.full(n, np.nan, dtype=np.float64)
         ad_arr = np.zeros(n, dtype=np.float64)
-        nov_arr = np.ones(n, dtype=np.float64)
         logp_arr = np.full(n, np.nan, dtype=np.float64)
         tpsa_arr = np.full(n, np.nan, dtype=np.float64)
         mw_arr = np.full(n, np.nan, dtype=np.float64)
@@ -258,7 +239,6 @@ class Evaluator:
                 p_active=p_active,
                 br_sascore=br_arr,
                 ad=ad_arr,
-                archive_novelty=nov_arr,
                 logp=logp_arr,
                 tpsa=tpsa_arr,
                 mw=mw_arr,
@@ -269,7 +249,6 @@ class Evaluator:
         all_scores = {
             "br_sascore": scores.br,
             "ad": scores.ad,
-            "novelty": scores.nov,
             "logp": scores.logp,
             "tpsa": scores.tpsa,
             "mw": scores.mw,
@@ -290,7 +269,6 @@ class Evaluator:
             p_active[i] = scores.pa[j]
             br_arr[i] = scores.br[j]
             ad_arr[i] = scores.ad[j]
-            nov_arr[i] = scores.nov[j]
             logp_arr[i] = scores.logp[j]
             tpsa_arr[i] = scores.tpsa[j]
             mw_arr[i] = scores.mw[j]
@@ -303,7 +281,6 @@ class Evaluator:
             p_active=p_active,
             br_sascore=br_arr,
             ad=ad_arr,
-            archive_novelty=nov_arr,
             logp=logp_arr,
             tpsa=tpsa_arr,
             mw=mw_arr,
@@ -318,7 +295,6 @@ class _ScoreBundle:
 
     br: np.ndarray
     ad: np.ndarray
-    nov: np.ndarray
     logp: np.ndarray
     tpsa: np.ndarray
     mw: np.ndarray

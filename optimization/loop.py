@@ -160,27 +160,18 @@ class CMAMAELoop:
         GridArchive
             The final archive of scored candidates.
         """
-        archive_novelty = self._evaluate.archive_novelty
-        decode_fn = self._evaluate.decode_fn
-
         for gen in range(start_gen, n_generations):
-            old_primary, old_result = self._snapshot_archive()
+            old_occupied = self._get_occupied_cells(self._archive)
 
             z = self._scheduler.ask()
             result = self._evaluate(z)
 
-            old_occupied = self._get_occupied_cells(self._archive)
             self._scheduler.tell(result.objectives, result.measures)
 
             self.last_insertion_stats = self._compute_insertion_stats(
                 result, len(z), old_occupied
             )
             self.last_emitter_stats = self._compute_emitter_stats()
-
-            if archive_novelty is not None:
-                self._sync_novelty_cache(
-                    old_primary, old_result, archive_novelty, decode_fn
-                )
 
             if on_step:
                 on_step(gen, result, self._archive)
@@ -189,20 +180,6 @@ class CMAMAELoop:
                 on_generation(gen, result, self._archive)
 
         return self._archive
-
-    def _snapshot_archive(self) -> tuple[set[int], set[int]]:
-        """Return occupied cell indices for both archives."""
-        if len(self._archive) == 0:
-            primary = set()
-        else:
-            primary = set(self._archive.data()["index"].tolist())
-
-        if self._result_archive is None or len(self._result_archive) == 0:
-            result = set()
-        else:
-            result = set(self._result_archive.data()["index"].tolist())
-
-        return primary, result
 
     def _get_occupied_cells(self, archive: GridArchive) -> dict[int, float]:
         """Return ``{cell_index: objective}`` for all occupied cells."""
@@ -268,33 +245,6 @@ class CMAMAELoop:
                 }
             )
         return stats
-
-    def _sync_novelty_cache(
-        self,
-        old_primary: set[int],
-        old_result: set[int],
-        archive_novelty,
-        decode_fn,
-    ) -> None:
-        """Update the archive novelty cache with newly inserted entries."""
-        for archive, old_indices in [
-            (self._archive, old_primary),
-            (self._result_archive, old_result),
-        ]:
-            if archive is None or len(archive) == 0:
-                continue
-            new_data = archive.data()
-            new_indices = set(new_data["index"].tolist())
-            added = new_indices - old_indices
-            if not added:
-                continue
-            added_mask = np.isin(new_data["index"], list(added))
-            added_solutions = new_data["solution"][added_mask]
-            smiles = decode_fn(added_solutions)
-            valid_smiles = [s for s in smiles if s != ""]
-            if valid_smiles:
-                cell_indices = new_data["index"][added_mask]
-                archive_novelty.update(cell_indices, valid_smiles)
 
 
 def _add_to_archive(archive: GridArchive, z: np.ndarray, result: EvalResult) -> None:

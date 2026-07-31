@@ -15,7 +15,6 @@ The optimization objective is the predicted probability that a molecule is antim
 
 - **[BR-SA Score](https://link.springer.com/article/10.1186/s13321-024-00879-0)** — a retrosynthesizability/synthetic accessibility measure.
 - **Applicability Domain** — the mean Tanimoto distance to the five nearest molecules in the training set.
-- **Novelty** — the mean Tanimoto distance to the *k* nearest archive elites.
 - **LogP** — lipophilicity (RDKit `MolLogP`).
 - **TPSA** — topological polar surface area (RDKit `TPSA`).
 
@@ -80,7 +79,6 @@ All parameters live in `config.toml` (parsed by `config.py` into dataclasses):
 | `[generative]` | `model_repo_id`, `device`, `latent_dim`, `n_seeds`, `seed` |
 | `[ad]` | `ad_model_path`, `n_neighbors`, `n_bits`, `radius`, `max_cache_size` |
 | `[activity]` | `model_path`, `device`, `softmax_temperature` |
-| `[novelty]` | `n_neighbors`, `n_bits`, `radius`, `max_cache_size` |
 | `[run]` | `n_generations`, `eval_every`, `seed`, `resume_from` |
 | `[output]` | `output_dir`, `run_name` |
 | `[tensorboard]` | `enabled`, `log_dir`, `scalar_every`, `histogram_every`, `figure_every` |
@@ -108,7 +106,6 @@ prediction/
 scoring/
   br_sascore.py         # BR-SAScore wrapper
   ad_scorer.py          # ADScorer (kNN distance from predictor training data)
-  archive_novelty.py    # ArchiveNoveltyScorer (kNN distance from archive elites)
   physchem.py           # PhysChemScorer (LogP, TPSA)
 
 optimization/

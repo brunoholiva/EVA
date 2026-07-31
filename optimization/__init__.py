@@ -7,10 +7,8 @@ from optimization.evaluator import EvalResult, Evaluator
 from optimization.loop import CMAMAELoop, build_scheduler
 from optimization.persistence import (
     load_archive,
-    load_archive_novelty_cache,
     load_scheduler,
     save_archive,
-    save_archive_novelty_cache,
     save_scheduler,
 )
 from optimization.plotting import create_parallel_axes_figure
@@ -19,20 +17,18 @@ from optimization.tensorboard import TensorBoardLogger
 from optimization.visualization import visualize_archive
 
 __all__ = [
+    "INVALID_MOLECULE_OBJECTIVE",
     "CMAMAELoop",
     "EvalResult",
     "Evaluator",
-    "INVALID_MOLECULE_OBJECTIVE",
+    "TensorBoardLogger",
     "build_scheduler",
     "create_parallel_axes_figure",
     "load_archive",
-    "load_archive_novelty_cache",
     "load_scheduler",
     "print_generation",
     "print_results",
     "save_archive",
-    "save_archive_novelty_cache",
     "save_scheduler",
-    "TensorBoardLogger",
     "visualize_archive",
 ]
