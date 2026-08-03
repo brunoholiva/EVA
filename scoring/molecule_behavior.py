@@ -12,9 +12,12 @@ import numpy as np
 from joblib import Parallel, delayed
 from rdkit import Chem
 from rdkit.Chem import Descriptors
+from rdkit.rdBase import DisableLog
 
 from featurization.morgan import compute_morgan
 from scoring.br_sascore import _get_scorer
+
+DisableLog("rdApp.*")
 
 
 @dataclass
@@ -31,6 +34,8 @@ class MolBehavior:
         Topological Polar Surface Area.
     mw : float
         Molecular weight.
+    fsp3 : float
+        Fraction of sp3-hybridized carbons (saturation / 3D-ness).
     morgan_fp : np.ndarray or None
         Morgan fingerprint as float32 array, or None if parsing failed.
     """
@@ -39,6 +44,7 @@ class MolBehavior:
     logp: float
     tpsa: float
     mw: float
+    fsp3: float
     morgan_fp: np.ndarray | None
 
 
@@ -68,11 +74,15 @@ def compute_molecule_behavior(
         values and a ``None`` fingerprint.
     """
     if not smi or not smi.strip():
-        return MolBehavior(float("nan"), float("nan"), float("nan"), float("nan"), None)
+        return MolBehavior(
+            float("nan"), float("nan"), float("nan"), float("nan"), float("nan"), None
+        )
 
     mol = Chem.MolFromSmiles(smi)
     if mol is None:
-        return MolBehavior(float("nan"), float("nan"), float("nan"), float("nan"), None)
+        return MolBehavior(
+            float("nan"), float("nan"), float("nan"), float("nan"), float("nan"), None
+        )
 
     if compute_br_sascore:
         try:
@@ -85,9 +95,12 @@ def compute_molecule_behavior(
     logp = Descriptors.MolLogP(mol)
     tpsa = Descriptors.TPSA(mol)
     mw = Descriptors.MolWt(mol)
+    fsp3 = Descriptors.FractionCSP3(mol)
     fp = compute_morgan(mol, radius=radius, fp_size=n_bits)
 
-    return MolBehavior(br_sascore=br, logp=logp, tpsa=tpsa, mw=mw, morgan_fp=fp)
+    return MolBehavior(
+        br_sascore=br, logp=logp, tpsa=tpsa, mw=mw, fsp3=fsp3, morgan_fp=fp
+    )
 
 
 def batch_molecule_behaviors(
@@ -97,7 +110,13 @@ def batch_molecule_behaviors(
     n_jobs: int = -1,
     compute_br_sascore: bool = True,
 ) -> tuple[
-    np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray | None,
+    np.ndarray,
 ]:
     """Compute MolBehavior for a batch of SMILES in parallel.
 
@@ -124,6 +143,8 @@ def batch_molecule_behaviors(
         TPSA values.  Invalid SMILES receive NaN.
     mw : np.ndarray of shape ``(len(smiles),)``
         Molecular weight values.  Invalid SMILES receive NaN.
+    fsp3 : np.ndarray of shape ``(len(smiles),)``
+        Fraction of sp3 carbons.  Invalid SMILES receive NaN.
     fps : np.ndarray of shape ``(n_valid_fps, n_bits)`` or None
         Morgan fingerprints for molecules where parsing succeeded.
     valid_fp_mask : np.ndarray of bool, shape ``(len(smiles),)``
@@ -140,6 +161,7 @@ def batch_molecule_behaviors(
     logp = np.full(n, float("nan"), dtype=np.float64)
     tpsa = np.full(n, float("nan"), dtype=np.float64)
     mw = np.full(n, float("nan"), dtype=np.float64)
+    fsp3 = np.full(n, float("nan"), dtype=np.float64)
     fps_list: list[np.ndarray] = []
     valid_fp_indices: list[int] = []
 
@@ -148,6 +170,7 @@ def batch_molecule_behaviors(
         logp[i] = mb.logp
         tpsa[i] = mb.tpsa
         mw[i] = mb.mw
+        fsp3[i] = mb.fsp3
         if mb.morgan_fp is not None:
             fps_list.append(mb.morgan_fp)
             valid_fp_indices.append(i)
@@ -156,7 +179,7 @@ def batch_molecule_behaviors(
     valid_fp_mask[valid_fp_indices] = True
 
     if not fps_list:
-        return br, logp, tpsa, mw, None, valid_fp_mask
+        return br, logp, tpsa, mw, fsp3, None, valid_fp_mask
 
     fps = np.array(fps_list, dtype=np.float32)
-    return br, logp, tpsa, mw, fps, valid_fp_mask
+    return br, logp, tpsa, mw, fsp3, fps, valid_fp_mask

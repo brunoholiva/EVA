@@ -10,7 +10,7 @@ from ribs.archives import GridArchive
 
 from config import ExperimentConfig, TensorBoardConfig
 from optimization.evaluator import EvalResult
-from optimization.plotting import create_parallel_axes_figure
+from optimization.plotting import create_archive_figure
 
 
 def _load_summary_writer_class():
@@ -93,10 +93,10 @@ class TensorBoardLogger:
         if step % self._cfg.histogram_every == 0:
             self._log_archive_histograms(report_archive, dimension_names, step)
 
-        if step % self._cfg.figure_every == 0 and report_archive.measure_dim >= 3:
-            figure = create_parallel_axes_figure(report_archive, dimension_names)
+        if step % self._cfg.figure_every == 0 and report_archive.measure_dim >= 2:
+            figure = create_archive_figure(report_archive, dimension_names)
             if figure is not None:
-                self._writer.add_figure("figures/archive_parallel_axes", figure, step)
+                self._writer.add_figure("figures/archive", figure, step)
 
     def close(self) -> None:
         """Close the writer if it was created."""
@@ -171,7 +171,7 @@ class TensorBoardLogger:
         name_to_index = {
             name: idx for idx, name in enumerate(dimension_names[: archive.measure_dim])
         }
-        for metric_name in ["br_sascore", "logp", "tpsa", "mw"]:
+        for metric_name in ["br_sascore", "logp", "tpsa", "mw", "fsp3"]:
             if metric_name not in name_to_index:
                 continue
             idx = name_to_index[metric_name]
