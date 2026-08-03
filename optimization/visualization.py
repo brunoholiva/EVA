@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rich.console import Console
 from ribs.archives import GridArchive
+from rich.console import Console
 
-from optimization.plotting import create_parallel_axes_figure
+from optimization.plotting import (
+    configure_matplotlib_agg,
+    create_archive_figure,
+)
 
 console = Console()
 
@@ -15,10 +18,13 @@ console = Console()
 def visualize_archive(
     archive: GridArchive,
     output_dir: str | Path,
-    filename: str = "parallel_axes.png",
+    filename: str | None = None,
     dimension_names: list[str] | None = None,
 ) -> Path:
-    """Render a parallel axes plot and save it as PNG.
+    """Render an archive figure and save it as PNG.
+
+    Archives with 1–2 measure dimensions are rendered as a grid heatmap;
+    archives with 3+ dimensions use a parallel axes plot.
 
     Parameters
     ----------
@@ -26,8 +32,9 @@ def visualize_archive(
         The archive to visualize.
     output_dir : str or Path
         Directory to write the image.
-    filename : str
-        Name of the output image file (default ``"parallel_axes.png"``).
+    filename : str or None
+        Name of the output image file. If ``None``, uses ``"heatmap.png"``
+        for 1–2 dimensional archives and ``"parallel_axes.png"`` otherwise.
     dimension_names : list of str or None
         Names of enabled archive dimensions.
 
@@ -36,24 +43,25 @@ def visualize_archive(
     Path
         Path to the saved image.
     """
-    import matplotlib
-
-    matplotlib.use("Agg")
+    configure_matplotlib_agg()
     import matplotlib.pyplot as plt
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if filename is None:
+        filename = "heatmap.png" if archive.measure_dim <= 2 else "parallel_axes.png"
     img_path = output_dir / filename
 
     if dimension_names is None:
         dimension_names = [f"dim_{i}" for i in range(archive.measure_dim)]
 
-    fig = create_parallel_axes_figure(archive, dimension_names)
+    fig = create_archive_figure(archive, dimension_names)
     if fig is None:
         console.print(f"No elites to visualize — skipped {img_path}")
         return img_path
 
     fig.savefig(img_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    console.print(f"Saved parallel axes → {img_path}")
+    console.print(f"Saved archive plot → {img_path}")
     return img_path
