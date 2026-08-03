@@ -24,9 +24,11 @@ from optimization import (
     visualize_archive,
 )
 from optimization.loop import CMAMAELoop
+from optimization.seeding import make_seed_and_emitter_points
 from prediction.activity import load_model as load_tabpfn
 from prediction.activity import predict_from_features
 from scoring.ad_scorer import ADScorer
+from scoring.fp_pca import load_fp_pca
 
 console = Console()
 
@@ -166,6 +168,15 @@ def main(argv: list[str | None] | None = None) -> None:
     vae = _load_vae(cfg)
     ad, tabpfn, featurizer = _load_scorers(cfg)
 
+    fp_proj = None
+    if cfg.fp_pca.enabled:
+        console.print(f"Loading FP projector ({cfg.fp_pca.path}) ...")
+        fp_proj = load_fp_pca(cfg.fp_pca.path)
+        console.print(
+            f"  {fp_proj.k} structural axes, "
+            f"ranges {[[round(a, 2), round(b, 2)] for a, b in fp_proj.ranges]}"
+        )
+
     evaluator = Evaluator(
         decode=vae.decode,
         ad=ad,
@@ -173,7 +184,15 @@ def main(argv: list[str | None] | None = None) -> None:
         activity_model=tabpfn,
         featurizer=featurizer,
         archive_cfg=cfg.archive,
+        fp_proj=fp_proj,
     )
+
+    z_seeds: np.ndarray | None = None
+    x0s: list[np.ndarray] | None = None
+    if not resume_from and cfg.seeding.enabled:
+        z_seeds, x0s = make_seed_and_emitter_points(
+            vae, cfg.seeding, cfg.emitter.n_emitters
+        )
 
     if resume_from:
         console.rule("[bold green]Resuming CMA-MAE")
@@ -181,15 +200,18 @@ def main(argv: list[str | None] | None = None) -> None:
         start_gen = scheduler.emitters[0]._itrs
         console.print(f"  Resuming from generation {start_gen}")
     else:
-        scheduler = build_scheduler(cfg.archive, cfg.emitter, cfg.run.seed)
+        scheduler = build_scheduler(cfg.archive, cfg.emitter, cfg.run.seed, x0s=x0s)
         start_gen = 0
 
     loop = CMAMAELoop(scheduler, evaluator)
 
     if not resume_from:
-        console.print(f"Generating {cfg.generative.n_seeds} random seed molecules ...")
-        rng = np.random.default_rng(cfg.generative.seed)
-        z_seeds = vae.generate_random(cfg.generative.n_seeds, rng=rng)
+        if z_seeds is None:
+            console.print(
+                f"Generating {cfg.generative.n_seeds} random seed molecules ..."
+            )
+            rng = np.random.default_rng(cfg.generative.seed)
+            z_seeds = vae.generate_random(cfg.generative.n_seeds, rng=rng)
         result = loop.seed_archive(z_seeds)
         console.print(
             f"  Seeded archive with {result.n_valid}/{len(z_seeds)} valid molecules"

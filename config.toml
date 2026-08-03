@@ -1,22 +1,22 @@
 [archive]
 solution_dim = 256
-dims = [15, 15, 10, 10, 10]
-ranges = [[1.0, 6.0], [0.0, 0.7], [-1.0, 6.0], [0.0, 200.0], [50.0, 600.0]]
-dimension_names = ["br_sascore", "ad", "logp", "tpsa", "mw"]
-dimension_enabled = [true, true, false, false, true]
-learning_rate = 0.1
+dims = [15, 15, 20, 10, 30, 30, 25, 25]
+ranges = [[1.0, 6.0], [0.0, 0.8], [-1.0, 6.0], [0.0, 200.0], [50.0, 600.0], [0.0, 1.0], [-2.31, 2.66], [-2.68, 2.18]]
+dimension_names = ["br_sascore", "ad", "logp", "tpsa", "mw", "fsp3", "fp_pc1", "fp_pc2"]
+dimension_enabled = [false, true, false, false, false, false, true, true]
+learning_rate = 0.01
 threshold_min = 0.0
 
 [emitter]
 sigma0 = 0.5
 batch_size = 32
-n_emitters = 8
+n_emitters = 16
 
 [generative]
 model_repo_id = "3BioCompBio/chembed-default"
 device = "cuda"
 latent_dim = 256
-n_seeds = 15000
+n_seeds = 500
 seed = 42
 
 [ad]
@@ -36,19 +36,35 @@ path = "data/pca_latent.joblib"
 enabled = true
 variance_threshold = 0.99
 
+[fp_pca]
+path = "data/fp_pca.joblib"
+enabled = true
+
 [run]
-n_generations = 3000
-eval_every = 10
+n_generations = 10
+eval_every = 5
 seed = 42
 resume_from = ""
 
 [output]
 output_dir = "results"
-run_name = "exp4_more_seeds"
+run_name = "TEST"
+
+[seeding]
+enabled = true
+data_path = "data/predictor/predictor_training_data.csv"
+smiles_col = "SMILES"
+target_col = "target"
+use_actives_only = true
+max_seeds = 2000
+dedupe_clusters = true
+cluster_threshold = 0.7
+n_cluster_emitters = 12
+seed = 42
 
 [tensorboard]
 enabled = true
 log_dir = "tensorboard"
 scalar_every = 1
 histogram_every = 10
-figure_every = 25
+figure_every = 3

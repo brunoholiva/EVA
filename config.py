@@ -31,7 +31,17 @@ class ArchiveConfig:
         if not any(self.dimension_enabled):
             raise ValueError("archive must enable at least one dimension")
 
-        valid_names = {"br_sascore", "ad", "logp", "tpsa", "mw"}
+        valid_names = {
+            "br_sascore",
+            "ad",
+            "logp",
+            "tpsa",
+            "mw",
+            "fsp3",
+            "fp_pc1",
+            "fp_pc2",
+            "fp_pc3",
+        }
         invalid_names = [
             name for name in self.dimension_names if name not in valid_names
         ]
@@ -52,6 +62,10 @@ class ArchiveConfig:
     def active_dimension_names(self) -> list[str]:
         """Return names of enabled dimensions."""
         return [n for n, e in zip(self.dimension_names, self.dimension_enabled) if e]
+
+    def fp_pc_dimensions_enabled(self) -> list[str]:
+        """Return the enabled structural (``fp_pc*``) dimension names."""
+        return [n for n in self.active_dimension_names() if n.startswith("fp_pc")]
 
 
 @dataclass
@@ -87,6 +101,20 @@ class ActivityConfig:
 
 
 @dataclass
+class SeedingConfig:
+    enabled: bool = False
+    data_path: str = "data/predictor/predictor_training_data.csv"
+    smiles_col: str = "SMILES"
+    target_col: str = "target"
+    use_actives_only: bool = True
+    max_seeds: int = 2000
+    dedupe_clusters: bool = True
+    cluster_threshold: float = 0.5
+    n_cluster_emitters: int = 0
+    seed: int = 42
+
+
+@dataclass
 class RunConfig:
     n_generations: int
     eval_every: int
@@ -105,6 +133,12 @@ class PCALatentConfig:
     path: str = "data/pca_latent.joblib"
     enabled: bool = True
     variance_threshold: float = 0.99
+
+
+@dataclass
+class FPProjectorConfig:
+    path: str = "data/fp_pca.joblib"
+    enabled: bool = False
 
 
 @dataclass
@@ -127,6 +161,8 @@ class ExperimentConfig:
     output: OutputConfig
     pca: PCALatentConfig = field(default_factory=PCALatentConfig)
     tensorboard: TensorBoardConfig = field(default_factory=TensorBoardConfig)
+    seeding: SeedingConfig = field(default_factory=SeedingConfig)
+    fp_pca: FPProjectorConfig = field(default_factory=FPProjectorConfig)
 
     @classmethod
     def from_toml(cls, file_path: str) -> ExperimentConfig:
@@ -145,6 +181,16 @@ class ExperimentConfig:
             output=OutputConfig(**raw.get("output", output_defaults)),
             pca=PCALatentConfig(**raw.get("pca", {})),
             tensorboard=TensorBoardConfig(**raw.get("tensorboard", {})),
+            seeding=SeedingConfig(**raw.get("seeding", {})),
+            fp_pca=FPProjectorConfig(**raw.get("fp_pca", {})),
         )
         config.archive.validate()
+        fp_pc_dims = config.archive.fp_pc_dimensions_enabled()
+        if fp_pc_dims and not config.fp_pca.enabled:
+            raise ValueError(
+                "archive dimensions "
+                + ", ".join(fp_pc_dims)
+                + " require [fp_pca] enabled = true "
+                f"({config.fp_pca.path})"
+            )
         return config

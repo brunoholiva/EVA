@@ -21,6 +21,7 @@ def build_scheduler(
     archive_cfg: ArchiveConfig,
     emitter_cfg: EmitterConfig,
     seed: int,
+    x0s: list[np.ndarray] | None = None,
 ) -> Scheduler:
     """Construct the pyribs scheduler from config.
 
@@ -32,6 +33,9 @@ def build_scheduler(
         Emitter sigma, batch size, and count.
     seed : int
         Random seed for reproducibility.
+    x0s : list of np.ndarray or None
+        Optional per-emitter starting points (one k-dim vector per emitter).
+        When ``None``, emitters start at random ``N(0, I)`` points.
 
     Returns
     -------
@@ -59,7 +63,10 @@ def build_scheduler(
     emitters = []
     for i in range(emitter_cfg.n_emitters):
         rng = np.random.default_rng(seed + i)
-        x0 = rng.standard_normal(archive_cfg.solution_dim).astype(np.float64)
+        if x0s is not None:
+            x0 = x0s[i]
+        else:
+            x0 = rng.standard_normal(archive_cfg.solution_dim).astype(np.float64)
         emitter = EvolutionStrategyEmitter(
             archive=archive,
             ranker="imp",

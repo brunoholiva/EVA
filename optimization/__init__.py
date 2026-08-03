@@ -11,8 +11,9 @@ from optimization.persistence import (
     save_archive,
     save_scheduler,
 )
-from optimization.plotting import create_parallel_axes_figure
+from optimization.plotting import create_archive_figure, create_parallel_axes_figure
 from optimization.reporting import print_generation, print_results
+from optimization.seeding import make_seed_and_emitter_points
 from optimization.tensorboard import TensorBoardLogger
 from optimization.visualization import visualize_archive
 
@@ -23,9 +24,11 @@ __all__ = [
     "Evaluator",
     "TensorBoardLogger",
     "build_scheduler",
+    "create_archive_figure",
     "create_parallel_axes_figure",
     "load_archive",
     "load_scheduler",
+    "make_seed_and_emitter_points",
     "print_generation",
     "print_results",
     "save_archive",
