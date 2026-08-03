@@ -47,16 +47,14 @@ def compute_morgan(
     return np.array(gen.GetFingerprint(mol), dtype=np.float32)
 
 
-def _compute_single_fp(
-    smi: str, radius: int, fp_size: int
-) -> tuple[np.ndarray | None, int]:
-    """Compute Morgan FP for one SMILES. Returns (fp or None, original_index)."""
+def _compute_single_fp(smi: str, radius: int, fp_size: int) -> np.ndarray | None:
+    """Compute Morgan FP for one SMILES, or None if it is invalid."""
     if not smi or not smi.strip():
-        return None, -1
+        return None
     mol = Chem.MolFromSmiles(smi)
     if mol is None:
-        return None, -1
-    return compute_morgan(mol, radius=radius, fp_size=fp_size), -1
+        return None
+    return compute_morgan(mol, radius=radius, fp_size=fp_size)
 
 
 def smiles_to_morgan(
@@ -94,7 +92,7 @@ def smiles_to_morgan(
     )
     fps: list[np.ndarray] = []
     valid_idx: list[int] = []
-    for i, (fp, _) in enumerate(results):
+    for i, fp in enumerate(results):
         if fp is not None:
             fps.append(fp)
             valid_idx.append(i)

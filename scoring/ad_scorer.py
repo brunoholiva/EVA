@@ -68,11 +68,6 @@ class ADScorer:
         """Precomputed row sums of *train_fps* (``(n_train,)`` float32)."""
         return self._train_sum
 
-    @property
-    def n_features(self) -> int:
-        """Number of bits in the Morgan fingerprint."""
-        return self._n_bits
-
     def compute_from_fps(self, fps: np.ndarray) -> np.ndarray:
         """Compute AD scores from pre-computed Morgan fingerprints.
 

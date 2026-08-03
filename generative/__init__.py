@@ -6,6 +6,7 @@ from pathlib import Path
 
 import joblib
 import numpy as np
+import selfies as sf
 import torch
 from chembed import checkpoint_utils
 from chembed import decode as dec
@@ -123,7 +124,7 @@ class ChemBedVAE:
         result: list[str] = []
         for s in selfies_list:
             try:
-                smi = __import__("selfies").decoder(s)
+                smi = sf.decoder(s)
                 mol = Chem.MolFromSmiles(smi)
                 result.append(smi if mol is not None else "")
             except Exception:

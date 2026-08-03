@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 
 import numpy as np
 import selfies as sf
@@ -18,12 +18,6 @@ MAX_SELFIES_TOKENS = 200
 if TYPE_CHECKING:
     from config import ArchiveConfig
     from scoring.ad_scorer import ADScorer
-
-
-class MolecularScorer(Protocol):
-    """Anything that scores a list of SMILES and returns a numeric array."""
-
-    def __call__(self, smiles: list[str]) -> np.ndarray: ...
 
 
 @dataclass
@@ -50,6 +44,7 @@ class EvalResult:
     logp: np.ndarray
     tpsa: np.ndarray
     mw: np.ndarray
+    fsp3: np.ndarray
     n_valid: int
     gen_time: float
     timings: EvalTimings = field(default_factory=EvalTimings)
@@ -74,6 +69,9 @@ class Evaluator:
         Feature transform matching the TabPFN training config.
     archive_cfg : ArchiveConfig
         Archive dimension configuration (names, enabled flags).
+    fp_proj : FPProjector or None
+        Optional structural projector; when set, its PCA axes are exposed
+        as ``fp_pc1``/``fp_pc2``/... measures.
     """
 
     def __init__(
@@ -84,6 +82,7 @@ class Evaluator:
         activity_model=None,
         featurizer=None,
         archive_cfg: ArchiveConfig | None = None,
+        fp_proj=None,
     ) -> None:
         self._decode_fn = decode
         self._ad = ad
@@ -91,12 +90,23 @@ class Evaluator:
         self._activity_model = activity_model
         self._featurizer = featurizer
         self._archive_cfg = archive_cfg
+        self._fp_proj = fp_proj
         self._enabled_indices = [
             i for i, e in enumerate(archive_cfg.dimension_enabled) if e
         ]
         enabled = dict(zip(archive_cfg.dimension_names, archive_cfg.dimension_enabled))
         self._br_sascore_enabled = enabled.get("br_sascore", True)
         self._ad_enabled = enabled.get("ad", True)
+
+        if fp_proj is not None:
+            for name in archive_cfg.active_dimension_names():
+                if name.startswith("fp_pc"):
+                    axis = int(name.removeprefix("fp_pc"))
+                    if axis > fp_proj.k:
+                        raise ValueError(
+                            f"archive dimension '{name}' requested but "
+                            f"FPProjector only provides {fp_proj.k} axes"
+                        )
 
     @property
     def decode_fn(self):
@@ -160,21 +170,29 @@ class Evaluator:
         with ThreadPoolExecutor(max_workers=1) as pool:
             cpu_future = pool.submit(self._compute_cpu_scores, valid_smiles)
             _, probs = self._activity_fn(X, self._activity_model)
-            br, logp, tpsa, ad, mw = cpu_future.result()
+            br, logp, tpsa, ad, mw, fsp3, fp_pc = cpu_future.result()
 
         timings.cpu_scorers = time.time() - t1
 
         pa = probs[:, 1]
-        return _ScoreBundle(br=br, ad=ad, logp=logp, tpsa=tpsa, mw=mw, pa=pa)
+        return _ScoreBundle(
+            br=br, ad=ad, logp=logp, tpsa=tpsa, mw=mw, fsp3=fsp3, fp_pc=fp_pc, pa=pa
+        )
 
-    def _compute_cpu_scores(
-        self, valid_smiles: list[str]
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def _compute_cpu_scores(self, valid_smiles: list[str]) -> tuple[
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray | None,
+    ]:
         """Compute CPU-bound molecular scores for valid SMILES.
 
-        Delegates per-molecule properties (BR-SAScore, LogP, TPSA, MW, Morgan FP)
-        to :func:`batch_molecule_behaviors`, then passes the fingerprints
-        to the AD scorer via its public API.
+        Delegates per-molecule properties (BR-SAScore, LogP, TPSA, MW, Fsp3,
+        Morgan FP) to :func:`batch_molecule_behaviors`, then passes the
+        fingerprints to the AD scorer and the optional FP projector.
         Skips computations for disabled dimensions.
 
         Parameters
@@ -194,10 +212,15 @@ class Evaluator:
             AD Tanimoto distances (1.0 if no training set).
         mw : np.ndarray
             Molecular weight values (NaN for molecules that failed scoring).
+        fsp3 : np.ndarray
+            Fraction of sp3 carbons.
+        fp_pc : np.ndarray of shape ``(len(valid_smiles), k)`` or None
+            Structural PCA coordinates (NaN where no fingerprint), or None
+            when no FP projector is configured.
         """
         from scoring.molecule_behavior import batch_molecule_behaviors
 
-        br, logp, tpsa, mw, fps, valid_fp_mask = batch_molecule_behaviors(
+        br, logp, tpsa, mw, fsp3, fps, valid_fp_mask = batch_molecule_behaviors(
             valid_smiles,
             self._ad.radius,
             self._ad.n_bits,
@@ -206,12 +229,19 @@ class Evaluator:
 
         ad = np.ones(len(valid_smiles), dtype=np.float32)
 
-        if fps is not None and len(fps) > 0:
-            if self._ad_enabled:
-                ad_dist = self._ad.compute_from_fps(fps)
-                ad[valid_fp_mask] = ad_dist
+        if fps is not None and len(fps) > 0 and self._ad_enabled:
+            ad_dist = self._ad.compute_from_fps(fps)
+            ad[valid_fp_mask] = ad_dist
 
-        return br, logp, tpsa, ad, mw
+        fp_pc: np.ndarray | None = None
+        if self._fp_proj is not None:
+            fp_pc = np.full(
+                (len(valid_smiles), self._fp_proj.k), np.nan, dtype=np.float32
+            )
+            if fps is not None and len(fps) > 0:
+                fp_pc[valid_fp_mask] = self._fp_proj.transform(fps)
+
+        return br, logp, tpsa, ad, mw, fsp3, fp_pc
 
     def _assemble(
         self,
@@ -230,49 +260,40 @@ class Evaluator:
         logp_arr = np.full(n, np.nan, dtype=np.float64)
         tpsa_arr = np.full(n, np.nan, dtype=np.float64)
         mw_arr = np.full(n, np.nan, dtype=np.float64)
+        fsp3_arr = np.full(n, np.nan, dtype=np.float64)
 
-        if scores is None:
-            return EvalResult(
-                smiles=smiles_list,
-                objectives=objectives,
-                measures=measures,
-                p_active=p_active,
-                br_sascore=br_arr,
-                ad=ad_arr,
-                logp=logp_arr,
-                tpsa=tpsa_arr,
-                mw=mw_arr,
-                n_valid=int(valid_mask.sum()),
-                gen_time=0.0,
-            )
+        kept = np.empty(0, dtype=np.int64)
+        if scores is not None:
+            reject = np.zeros(len(scores.pa), dtype=bool)
+            if self._br_sascore_enabled:
+                reject |= np.isnan(scores.br)
+            if self._fp_proj is not None and scores.fp_pc is not None:
+                reject |= np.isnan(scores.fp_pc).any(axis=1)
+            accept = ~reject
+            kept = np.flatnonzero(valid_mask)[accept]
 
-        all_scores = {
-            "br_sascore": scores.br,
-            "ad": scores.ad,
-            "logp": scores.logp,
-            "tpsa": scores.tpsa,
-            "mw": scores.mw,
-        }
-
-        j = 0
-        for i in range(n):
-            if not valid_mask[i]:
-                continue
-            if self._br_sascore_enabled and np.isnan(scores.br[j]):
-                j += 1
-                continue
-
-            objectives[i] = scores.pa[j]
+            objectives[kept] = scores.pa[accept]
+            p_active[kept] = scores.pa[accept]
+            all_scores = {
+                "br_sascore": scores.br,
+                "ad": scores.ad,
+                "logp": scores.logp,
+                "tpsa": scores.tpsa,
+                "mw": scores.mw,
+                "fsp3": scores.fsp3,
+            }
+            if scores.fp_pc is not None:
+                for axis in range(scores.fp_pc.shape[1]):
+                    all_scores[f"fp_pc{axis + 1}"] = scores.fp_pc[:, axis]
             for k, dim_idx in enumerate(self._enabled_indices):
                 dim_name = self._archive_cfg.dimension_names[dim_idx]
-                measures[i, k] = all_scores[dim_name][j]
-            p_active[i] = scores.pa[j]
-            br_arr[i] = scores.br[j]
-            ad_arr[i] = scores.ad[j]
-            logp_arr[i] = scores.logp[j]
-            tpsa_arr[i] = scores.tpsa[j]
-            mw_arr[i] = scores.mw[j]
-            j += 1
+                measures[kept, k] = all_scores[dim_name][accept]
+            br_arr[kept] = scores.br[accept]
+            ad_arr[kept] = scores.ad[accept]
+            logp_arr[kept] = scores.logp[accept]
+            tpsa_arr[kept] = scores.tpsa[accept]
+            mw_arr[kept] = scores.mw[accept]
+            fsp3_arr[kept] = scores.fsp3[accept]
 
         return EvalResult(
             smiles=smiles_list,
@@ -284,6 +305,7 @@ class Evaluator:
             logp=logp_arr,
             tpsa=tpsa_arr,
             mw=mw_arr,
+            fsp3=fsp3_arr,
             n_valid=int(valid_mask.sum()),
             gen_time=0.0,
         )
@@ -298,6 +320,8 @@ class _ScoreBundle:
     logp: np.ndarray
     tpsa: np.ndarray
     mw: np.ndarray
+    fsp3: np.ndarray
+    fp_pc: np.ndarray | None
     pa: np.ndarray
 
 
