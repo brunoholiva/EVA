@@ -12,12 +12,15 @@ from joblib import Parallel, delayed
 from rdkit import Chem
 
 from optimization.constants import INVALID_MOLECULE_OBJECTIVE
+from reporting.suppress import suppress_joblib_warnings
+
+suppress_joblib_warnings()
 
 MAX_SELFIES_TOKENS = 200
 
 if TYPE_CHECKING:
     from config import ArchiveConfig
-    from scoring.ad_scorer import ADScorer
+    from evaluation.applicability import ADScorer
 
 
 @dataclass
@@ -39,7 +42,6 @@ class EvalResult:
     objectives: np.ndarray
     measures: np.ndarray
     p_active: np.ndarray
-    br_sascore: np.ndarray
     ad: np.ndarray
     logp: np.ndarray
     tpsa: np.ndarray
@@ -69,9 +71,6 @@ class Evaluator:
         Feature transform matching the TabPFN training config.
     archive_cfg : ArchiveConfig
         Archive dimension configuration (names, enabled flags).
-    fp_proj : FPProjector or None
-        Optional structural projector; when set, its PCA axes are exposed
-        as ``fp_pc1``/``fp_pc2``/... measures.
     """
 
     def __init__(
@@ -82,7 +81,6 @@ class Evaluator:
         activity_model=None,
         featurizer=None,
         archive_cfg: ArchiveConfig | None = None,
-        fp_proj=None,
     ) -> None:
         self._decode_fn = decode
         self._ad = ad
@@ -90,23 +88,9 @@ class Evaluator:
         self._activity_model = activity_model
         self._featurizer = featurizer
         self._archive_cfg = archive_cfg
-        self._fp_proj = fp_proj
-        self._enabled_indices = [
-            i for i, e in enumerate(archive_cfg.dimension_enabled) if e
-        ]
-        enabled = dict(zip(archive_cfg.dimension_names, archive_cfg.dimension_enabled))
-        self._br_sascore_enabled = enabled.get("br_sascore", True)
-        self._ad_enabled = enabled.get("ad", True)
-
-        if fp_proj is not None:
-            for name in archive_cfg.active_dimension_names():
-                if name.startswith("fp_pc"):
-                    axis = int(name.removeprefix("fp_pc"))
-                    if axis > fp_proj.k:
-                        raise ValueError(
-                            f"archive dimension '{name}' requested but "
-                            f"FPProjector only provides {fp_proj.k} axes"
-                        )
+        self._enabled_indices = list(range(len(archive_cfg.dimensions)))
+        enabled_names = archive_cfg.active_dimension_names()
+        self._ad_enabled = "ad" in enabled_names
 
     @property
     def decode_fn(self):
@@ -170,30 +154,19 @@ class Evaluator:
         with ThreadPoolExecutor(max_workers=1) as pool:
             cpu_future = pool.submit(self._compute_cpu_scores, valid_smiles)
             _, probs = self._activity_fn(X, self._activity_model)
-            br, logp, tpsa, ad, mw, fsp3, fp_pc = cpu_future.result()
+            dim_scores = cpu_future.result()
 
         timings.cpu_scorers = time.time() - t1
 
         pa = probs[:, 1]
-        return _ScoreBundle(
-            br=br, ad=ad, logp=logp, tpsa=tpsa, mw=mw, fsp3=fsp3, fp_pc=fp_pc, pa=pa
-        )
+        return _ScoreBundle(dim_scores=dim_scores, pa=pa)
 
-    def _compute_cpu_scores(self, valid_smiles: list[str]) -> tuple[
-        np.ndarray,
-        np.ndarray,
-        np.ndarray,
-        np.ndarray,
-        np.ndarray,
-        np.ndarray,
-        np.ndarray | None,
-    ]:
+    def _compute_cpu_scores(
+        self, valid_smiles: list[str]
+    ) -> dict[str, np.ndarray]:
         """Compute CPU-bound molecular scores for valid SMILES.
 
-        Delegates per-molecule properties (BR-SAScore, LogP, TPSA, MW, Fsp3,
-        Morgan FP) to :func:`batch_molecule_behaviors`, then passes the
-        fingerprints to the AD scorer and the optional FP projector.
-        Skips computations for disabled dimensions.
+        Uses the dimension registry to compute all requested dimensions.
 
         Parameters
         ----------
@@ -202,46 +175,16 @@ class Evaluator:
 
         Returns
         -------
-        br : np.ndarray
-            BR-SAScore values (NaN for molecules that failed scoring).
-        logp : np.ndarray
-            LogP values.
-        tpsa : np.ndarray
-            TPSA values.
-        ad : np.ndarray
-            AD Tanimoto distances (1.0 if no training set).
-        mw : np.ndarray
-            Molecular weight values (NaN for molecules that failed scoring).
-        fsp3 : np.ndarray
-            Fraction of sp3 carbons.
-        fp_pc : np.ndarray of shape ``(len(valid_smiles), k)`` or None
-            Structural PCA coordinates (NaN where no fingerprint), or None
-            when no FP projector is configured.
+        dict of str to np.ndarray
+            Dictionary mapping dimension names to computed values.
         """
-        from scoring.molecule_behavior import batch_molecule_behaviors
+        from evaluation.dimensions import DimensionContext, compute_dimensions
 
-        br, logp, tpsa, mw, fsp3, fps, valid_fp_mask = batch_molecule_behaviors(
-            valid_smiles,
-            self._ad.radius,
-            self._ad.n_bits,
-            compute_br_sascore=self._br_sascore_enabled,
+        ctx = DimensionContext(
+            ad_scorer=self._ad if self._ad_enabled else None,
         )
-
-        ad = np.ones(len(valid_smiles), dtype=np.float32)
-
-        if fps is not None and len(fps) > 0 and self._ad_enabled:
-            ad_dist = self._ad.compute_from_fps(fps)
-            ad[valid_fp_mask] = ad_dist
-
-        fp_pc: np.ndarray | None = None
-        if self._fp_proj is not None:
-            fp_pc = np.full(
-                (len(valid_smiles), self._fp_proj.k), np.nan, dtype=np.float32
-            )
-            if fps is not None and len(fps) > 0:
-                fp_pc[valid_fp_mask] = self._fp_proj.transform(fps)
-
-        return br, logp, tpsa, ad, mw, fsp3, fp_pc
+        dimension_names = self._archive_cfg.active_dimension_names()
+        return compute_dimensions(valid_smiles, dimension_names, ctx)
 
     def _assemble(
         self,
@@ -255,57 +198,34 @@ class Evaluator:
         n_active = len(self._enabled_indices)
         measures = np.zeros((n, n_active), dtype=np.float64)
         p_active = np.zeros(n, dtype=np.float64)
-        br_arr = np.full(n, np.nan, dtype=np.float64)
-        ad_arr = np.zeros(n, dtype=np.float64)
-        logp_arr = np.full(n, np.nan, dtype=np.float64)
-        tpsa_arr = np.full(n, np.nan, dtype=np.float64)
-        mw_arr = np.full(n, np.nan, dtype=np.float64)
-        fsp3_arr = np.full(n, np.nan, dtype=np.float64)
+        
+        dim_arrays = {}
+        for dim_name in self._archive_cfg.active_dimension_names():
+            dim_arrays[dim_name] = np.full(n, np.nan, dtype=np.float64)
 
         kept = np.empty(0, dtype=np.int64)
         if scores is not None:
-            reject = np.zeros(len(scores.pa), dtype=bool)
-            if self._br_sascore_enabled:
-                reject |= np.isnan(scores.br)
-            if self._fp_proj is not None and scores.fp_pc is not None:
-                reject |= np.isnan(scores.fp_pc).any(axis=1)
-            accept = ~reject
+            accept = np.ones(len(scores.pa), dtype=bool)
             kept = np.flatnonzero(valid_mask)[accept]
 
             objectives[kept] = scores.pa[accept]
             p_active[kept] = scores.pa[accept]
-            all_scores = {
-                "br_sascore": scores.br,
-                "ad": scores.ad,
-                "logp": scores.logp,
-                "tpsa": scores.tpsa,
-                "mw": scores.mw,
-                "fsp3": scores.fsp3,
-            }
-            if scores.fp_pc is not None:
-                for axis in range(scores.fp_pc.shape[1]):
-                    all_scores[f"fp_pc{axis + 1}"] = scores.fp_pc[:, axis]
+            
             for k, dim_idx in enumerate(self._enabled_indices):
-                dim_name = self._archive_cfg.dimension_names[dim_idx]
-                measures[kept, k] = all_scores[dim_name][accept]
-            br_arr[kept] = scores.br[accept]
-            ad_arr[kept] = scores.ad[accept]
-            logp_arr[kept] = scores.logp[accept]
-            tpsa_arr[kept] = scores.tpsa[accept]
-            mw_arr[kept] = scores.mw[accept]
-            fsp3_arr[kept] = scores.fsp3[accept]
+                dim_name = self._archive_cfg.dimensions[dim_idx].name
+                measures[kept, k] = scores.dim_scores[dim_name][accept]
+                dim_arrays[dim_name][kept] = scores.dim_scores[dim_name][accept]
 
         return EvalResult(
             smiles=smiles_list,
             objectives=objectives,
             measures=measures,
             p_active=p_active,
-            br_sascore=br_arr,
-            ad=ad_arr,
-            logp=logp_arr,
-            tpsa=tpsa_arr,
-            mw=mw_arr,
-            fsp3=fsp3_arr,
+            ad=dim_arrays.get("ad", np.zeros(n, dtype=np.float64)),
+            logp=dim_arrays.get("logp", np.full(n, np.nan, dtype=np.float64)),
+            tpsa=dim_arrays.get("tpsa", np.full(n, np.nan, dtype=np.float64)),
+            mw=dim_arrays.get("mw", np.full(n, np.nan, dtype=np.float64)),
+            fsp3=dim_arrays.get("fsp3", np.full(n, np.nan, dtype=np.float64)),
             n_valid=int(valid_mask.sum()),
             gen_time=0.0,
         )
@@ -315,13 +235,7 @@ class Evaluator:
 class _ScoreBundle:
     """Container for per-molecule scores from all scorers."""
 
-    br: np.ndarray
-    ad: np.ndarray
-    logp: np.ndarray
-    tpsa: np.ndarray
-    mw: np.ndarray
-    fsp3: np.ndarray
-    fp_pc: np.ndarray | None
+    dim_scores: dict[str, np.ndarray]
     pa: np.ndarray
 
 

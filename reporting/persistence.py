@@ -9,11 +9,9 @@ import numpy as np
 import pandas as pd
 from ribs.archives import GridArchive
 from ribs.schedulers import Scheduler
-from rich.console import Console
 
-from optimization.reporting import _rank_archive
-
-console = Console()
+from reporting.console import loaded, saved
+from reporting.reporting import _rank_archive
 
 
 def save_archive(
@@ -22,6 +20,7 @@ def save_archive(
     output_dir: str | Path,
     suffix: str = "archive",
     dimension_names: list[str] | None = None,
+    real_objectives: dict[int, float] | None = None,
 ) -> Path:
     """Save the archive as joblib (full state) and CSV (tabular data).
 
@@ -37,6 +36,8 @@ def save_archive(
         Base filename for the saved files (default ``"archive"``).
     dimension_names : list of str or None
         Names of enabled archive dimensions.
+    real_objectives : dict or None
+        Real P(active) values (uncapped) keyed by solution index.
 
     Returns
     -------
@@ -48,11 +49,11 @@ def save_archive(
 
     joblib_path = output_dir / f"{suffix}.joblib"
     joblib.dump(archive, joblib_path)
-    console.print(f"Saved archive → {joblib_path}")
+    saved("archive", joblib_path)
 
     csv_path = output_dir / f"{suffix}.csv"
-    _export_archive_csv(archive, decode_fn, csv_path, dimension_names)
-    console.print(f"Saved CSV     → {csv_path}")
+    _export_archive_csv(archive, decode_fn, csv_path, dimension_names, real_objectives)
+    saved("CSV", csv_path)
 
     return output_dir
 
@@ -71,7 +72,7 @@ def load_archive(path: str | Path) -> GridArchive:
         The restored archive.
     """
     archive: GridArchive = joblib.load(path)
-    console.print(f"Loaded archive from {path} ({len(archive)} cells)")
+    loaded("archive", path, f"{len(archive)} cells")
     return archive
 
 
@@ -80,13 +81,14 @@ def _export_archive_csv(
     decode_fn,
     csv_path: Path,
     dimension_names: list[str] | None = None,
+    real_objectives: dict[int, float] | None = None,
 ) -> None:
     """Write archive contents to a CSV file."""
     if dimension_names is None:
         dimension_names = [f"dim_{i}" for i in range(archive.measure_dim)]
 
     if len(archive) == 0:
-        columns = ["rank", "smiles", "p_active"] + dimension_names
+        columns = ["rank", "smiles", "p_active", "p_active_real"] + dimension_names
         pd.DataFrame(columns=columns).to_csv(csv_path, index=False)
         return
 
@@ -98,6 +100,13 @@ def _export_archive_csv(
         "smiles": smiles,
         "p_active": arch_data["objective"][order],
     }
+
+    # Add real P(active) if available
+    if real_objectives is not None:
+        data["p_active_real"] = [real_objectives.get(idx, np.nan) for idx in order]
+    else:
+        data["p_active_real"] = [np.nan] * len(order)
+
     for d, name in enumerate(dimension_names):
         data[name] = arch_data["measures"][order, d]
 
@@ -124,7 +133,7 @@ def save_scheduler(scheduler: Scheduler, output_dir: str | Path) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / "scheduler.joblib"
     joblib.dump(scheduler, path)
-    console.print(f"Saved scheduler → {path}")
+    saved("scheduler", path)
     return path
 
 
@@ -142,5 +151,5 @@ def load_scheduler(path: str | Path) -> Scheduler:
         The restored scheduler with full CMA-ES state.
     """
     scheduler: Scheduler = joblib.load(path)
-    console.print(f"Loaded scheduler from {path} ({len(scheduler.archive)} cells)")
+    loaded("scheduler", path, f"{len(scheduler.archive)} cells")
     return scheduler

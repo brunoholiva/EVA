@@ -11,6 +11,10 @@ from joblib import Parallel, delayed
 from rdkit import Chem
 from rdkit.Chem.rdFingerprintGenerator import GetMorganGenerator
 
+from reporting.suppress import suppress_joblib_warnings
+
+suppress_joblib_warnings()
+
 _GEN_CACHE: dict[tuple[int, int], object] = {}
 
 

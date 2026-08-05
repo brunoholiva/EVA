@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import numpy as np
-from rich.console import Console
-from rich.table import Table
 from ribs.archives import GridArchive
 
+from reporting.console import console, make_table, section
 from optimization.evaluator import EvalResult
-
-console = Console()
 
 
 def print_generation(
@@ -33,9 +30,10 @@ def print_generation(
     """
     report = result_archive if result_archive is not None else archive
 
-    table = Table(title=f"Generation {gen}", show_header=True)
-    table.add_column("Metric", style="cyan")
-    table.add_column("Value", style="magenta")
+    table = make_table(
+        f"Generation {gen}",
+        [("Metric", "cyan"), ("Value", "magenta")],
+    )
 
     table.add_row("Valid candidates", str(result.n_valid))
     table.add_row("Archive size", str(len(report)))
@@ -75,7 +73,7 @@ def print_results(
     """
     report = result_archive if result_archive is not None else archive
 
-    console.rule("[bold green]Results")
+    section("Results")
     console.print(f"Archive size: {len(report)}")
 
     if len(report) == 0:
@@ -85,18 +83,20 @@ def print_results(
     best_idx = np.argmax(arch_data["objective"])
     console.print(f"Best P(active): {arch_data['objective'][best_idx]:.4f}")
 
-    order, solutions, smiles = _rank_archive(report, decode_fn, top_n)
+    order, _, smiles = _rank_archive(report, decode_fn, top_n)
 
     if dimension_names is None:
         dimension_names = [f"dim_{i}" for i in range(report.measure_dim)]
 
-    table = Table(title="Top Candidates", show_header=True)
-    table.add_column("Rank", style="cyan")
-    table.add_column("SMILES", style="white")
-    table.add_column("P(active)", style="magenta")
-
+    columns = [
+        ("Rank", "cyan"),
+        ("SMILES", "white"),
+        ("P(active)", "magenta"),
+    ]
     for name in dimension_names:
-        table.add_column(name, style="yellow")
+        columns.append((name, "yellow"))
+
+    table = make_table("Top Candidates", columns)
 
     for rank, idx in enumerate(order, 1):
         smi = smiles[rank - 1] if rank - 1 < len(smiles) else ""

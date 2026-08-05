@@ -19,16 +19,18 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
-from rdkit import RDLogger
 from rich.progress import (
     BarColumn,
     Progress,
     TextColumn,
     TimeRemainingColumn,
 )
-from featurization.morgan import compute_morgan
 
-RDLogger.DisableLog("rdApp.*")
+from chemistry.fingerprint import compute_morgan
+from reporting.console import console, detail, saved, step
+from reporting.suppress import suppress_rdkit_logs
+
+suppress_rdkit_logs()
 
 N_BITS_DEFAULT: int = 2048
 RADIUS_DEFAULT: int = 2
@@ -89,7 +91,7 @@ def build_model(
     """
     df = pd.read_csv(csv_path)
     smiles_list = df[smiles_col].dropna().tolist()
-    print(f"Loaded {len(smiles_list):,} SMILES from {csv_path}")
+    step(f"Loaded {len(smiles_list):,} SMILES from {csv_path}")
 
     columns = [
         TextColumn("  "),
@@ -102,7 +104,7 @@ def build_model(
     fps: list[np.ndarray] = []
     n_invalid = 0
 
-    with Progress(*columns) as progress:
+    with Progress(*columns, console=console) as progress:
         task = progress.add_task(
             "[magenta]Computing fingerprints", total=len(smiles_list)
         )
@@ -115,7 +117,9 @@ def build_model(
             progress.advance(task)
 
     fps_arr = np.array(fps, dtype=np.uint8)
-    print(f"Valid fingerprints: {len(fps):,}  |  Invalid SMILES skipped: {n_invalid:,}")
+    detail(
+        f"Valid fingerprints: {len(fps):,}  |  Invalid SMILES skipped: {n_invalid:,}"
+    )
 
     from sklearn.neighbors import NearestNeighbors
 
@@ -123,7 +127,7 @@ def build_model(
     nn = NearestNeighbors(metric="jaccard", n_neighbors=n_neighbors)
     nn.fit(fps_arr.astype(bool))
     elapsed = time.perf_counter() - t0
-    print(f"kNN fit ({n_neighbors} neighbors, Jaccard): {elapsed:.1f}s")
+    detail(f"kNN fit ({n_neighbors} neighbors, Jaccard): {elapsed:.1f}s")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(
@@ -136,7 +140,7 @@ def build_model(
         },
         out_path,
     )
-    print(f"Saved to {out_path}  ({out_path.stat().st_size / 1e6:.1f} MB)")
+    saved("AD model", out_path, f"{out_path.stat().st_size / 1e6:.1f} MB")
 
 
 def main() -> None:

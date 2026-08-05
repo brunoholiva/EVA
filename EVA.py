@@ -6,11 +6,10 @@ import argparse
 from pathlib import Path
 
 import numpy as np
-from rich.console import Console
 from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
 
 from config import ExperimentConfig
-from featurization.features import MoleculeFeaturizer
+from chemistry.features import MoleculeFeaturizer
 from generative import ChemBedVAE, ProjectedVAE
 from optimization import (
     Evaluator,
@@ -23,14 +22,11 @@ from optimization import (
     save_scheduler,
     visualize_archive,
 )
+from reporting.console import console, detail, section, step
 from optimization.loop import CMAMAELoop
-from optimization.seeding import make_seed_and_emitter_points
-from prediction.activity import load_model as load_tabpfn
-from prediction.activity import predict_from_features
-from scoring.ad_scorer import ADScorer
-from scoring.fp_pca import load_fp_pca
-
-console = Console()
+from evaluation.activity import load_model as load_tabpfn
+from evaluation.activity import predict_from_features
+from evaluation.applicability import ADScorer
 
 
 def _parse_args(argv: list[str] | None) -> tuple[str, str | None]:
@@ -54,25 +50,23 @@ def _parse_args(argv: list[str] | None) -> tuple[str, str | None]:
 
 def _load_vae(cfg: ExperimentConfig) -> ChemBedVAE | ProjectedVAE:
     """Load the ChemBed VAE, optionally wrapped with PCA projection."""
-    console.print("Loading ChemBed VAE ...")
+    step("Loading ChemBed VAE")
     vae = ChemBedVAE(
         model_repo_id=cfg.generative.model_repo_id,
         device=cfg.generative.device,
         latent_dim=cfg.generative.latent_dim,
     )
     if cfg.pca.enabled:
-        console.print(f"Applying PCA projection ({cfg.pca.path}) ...")
+        step(f"Applying PCA projection ({cfg.pca.path})")
         vae = ProjectedVAE(vae, cfg.pca.path)
         cfg.archive.solution_dim = vae.latent_dim
-        console.print(
-            f"  Working space: {vae.latent_dim} dim (was {cfg.generative.latent_dim})"
-        )
+        detail(f"Working space: {vae.latent_dim} dim (was {cfg.generative.latent_dim})")
     return vae
 
 
 def _load_scorers(cfg: ExperimentConfig):
     """Load AD scorer, TabPFN, and featurizer."""
-    console.print("Loading scorers ...")
+    step("Loading scorers")
     ad = ADScorer(
         model_path=cfg.ad.ad_model_path,
         n_neighbors=cfg.ad.n_neighbors,
@@ -106,7 +100,7 @@ def _run_loop(
         TimeRemainingColumn(),
     ]
 
-    with Progress(*columns, console=console) as progress:
+    with Progress(*columns, console=console, transient=True) as progress:
         task = progress.add_task(
             "CMA-MAE",
             total=n_gen,
@@ -129,6 +123,8 @@ def _run_loop(
                 dimension_names=cfg.archive.active_dimension_names(),
                 insertion_stats=loop.last_insertion_stats,
                 emitter_stats=loop.last_emitter_stats,
+                real_objectives=loop.real_objectives,
+                objective_cap=cfg.archive.objective_cap,
             )
 
         def _on_progress(gen, result, archive):
@@ -137,8 +133,8 @@ def _run_loop(
                 print_generation(gen, result, archive, loop.result_archive)
                 if gen > 0 and result.timings.decode > 0:
                     t = result.timings
-                    console.print(
-                        f"  ⏱ decode={t.decode:.1f}s valid={t.validity:.1f}s "
+                    detail(
+                        f"decode={t.decode:.1f}s valid={t.validity:.1f}s "
                         f"feat={t.featurize_predict:.1f}s cpu={t.cpu_scorers:.1f}s"
                     )
                 save_scheduler(loop.scheduler, output_dir)
@@ -152,12 +148,43 @@ def _run_loop(
         )
 
 
+def _save_results(
+    loop: CMAMAELoop,
+    vae: ChemBedVAE | ProjectedVAE,
+    output_dir: Path,
+    dimension_names: list[str],
+) -> None:
+    """Save archives, scheduler, and visualizations."""
+    save_archive(
+        loop.archive,
+        vae.decode,
+        output_dir,
+        dimension_names=dimension_names,
+        real_objectives=loop.real_objectives,
+    )
+    if loop.result_archive is not None:
+        save_archive(
+            loop.result_archive,
+            vae.decode,
+            output_dir,
+            suffix="result_archive",
+            dimension_names=dimension_names,
+            real_objectives=loop.real_objectives,
+        )
+    save_scheduler(loop.scheduler, output_dir)
+    visualize_archive(
+        loop.result_archive if loop.result_archive is not None else loop.archive,
+        output_dir,
+        dimension_names=dimension_names,
+    )
+
+
 def main(argv: list[str | None] | None = None) -> None:
     """Entry point for the EVA evolution loop."""
     config_path, resume_path = _parse_args(argv)
 
-    console.rule("[bold green]EVA")
-    console.print(f"Loading config from {config_path}")
+    section("EVA")
+    step(f"Loading config from {config_path}")
     cfg = ExperimentConfig.from_toml(config_path)
 
     output_dir = Path(cfg.output.output_dir) / cfg.output.run_name
@@ -168,15 +195,6 @@ def main(argv: list[str | None] | None = None) -> None:
     vae = _load_vae(cfg)
     ad, tabpfn, featurizer = _load_scorers(cfg)
 
-    fp_proj = None
-    if cfg.fp_pca.enabled:
-        console.print(f"Loading FP projector ({cfg.fp_pca.path}) ...")
-        fp_proj = load_fp_pca(cfg.fp_pca.path)
-        console.print(
-            f"  {fp_proj.k} structural axes, "
-            f"ranges {[[round(a, 2), round(b, 2)] for a, b in fp_proj.ranges]}"
-        )
-
     evaluator = Evaluator(
         decode=vae.decode,
         ad=ad,
@@ -184,41 +202,21 @@ def main(argv: list[str | None] | None = None) -> None:
         activity_model=tabpfn,
         featurizer=featurizer,
         archive_cfg=cfg.archive,
-        fp_proj=fp_proj,
     )
 
-    z_seeds: np.ndarray | None = None
-    x0s: list[np.ndarray] | None = None
-    if not resume_from and cfg.seeding.enabled:
-        z_seeds, x0s = make_seed_and_emitter_points(
-            vae, cfg.seeding, cfg.emitter.n_emitters
-        )
-
     if resume_from:
-        console.rule("[bold green]Resuming CMA-MAE")
+        section("Resuming CMA-MAE")
         scheduler = load_scheduler(resume_from)
         start_gen = scheduler.emitters[0]._itrs
-        console.print(f"  Resuming from generation {start_gen}")
+        detail(f"Resuming from generation {start_gen}")
     else:
-        scheduler = build_scheduler(cfg.archive, cfg.emitter, cfg.run.seed, x0s=x0s)
+        scheduler = build_scheduler(cfg.archive, cfg.emitter, cfg.run.seed)
         start_gen = 0
 
-    loop = CMAMAELoop(scheduler, evaluator)
-
-    if not resume_from:
-        if z_seeds is None:
-            console.print(
-                f"Generating {cfg.generative.n_seeds} random seed molecules ..."
-            )
-            rng = np.random.default_rng(cfg.generative.seed)
-            z_seeds = vae.generate_random(cfg.generative.n_seeds, rng=rng)
-        result = loop.seed_archive(z_seeds)
-        console.print(
-            f"  Seeded archive with {result.n_valid}/{len(z_seeds)} valid molecules"
-        )
+    loop = CMAMAELoop(scheduler, evaluator, objective_cap=cfg.archive.objective_cap)
 
     try:
-        console.rule("[bold green]Running CMA-MAE")
+        section("Running CMA-MAE")
         _run_loop(
             loop,
             cfg,
@@ -233,33 +231,12 @@ def main(argv: list[str | None] | None = None) -> None:
             result_archive=loop.result_archive,
             dimension_names=cfg.archive.active_dimension_names(),
         )
-        save_archive(
-            loop.archive,
-            vae.decode,
+        _save_results(
+            loop,
+            vae,
             output_dir,
-            dimension_names=cfg.archive.active_dimension_names(),
+            cfg.archive.active_dimension_names(),
         )
-        if loop.result_archive is not None:
-            save_archive(
-                loop.result_archive,
-                vae.decode,
-                output_dir,
-                suffix="result_archive",
-                dimension_names=cfg.archive.active_dimension_names(),
-            )
-        save_scheduler(loop.scheduler, output_dir)
-        visualize_archive(
-            loop.archive,
-            output_dir,
-            dimension_names=cfg.archive.active_dimension_names(),
-        )
-        if loop.result_archive is not None:
-            visualize_archive(
-                loop.result_archive,
-                output_dir,
-                filename="result_archive_heatmap.png",
-                dimension_names=cfg.archive.active_dimension_names(),
-            )
     finally:
         tb_logger.close()
 

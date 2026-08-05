@@ -1,11 +1,18 @@
 [archive]
 solution_dim = 256
-dims = [15, 15, 20, 10, 30, 30, 25, 25]
-ranges = [[1.0, 6.0], [0.0, 0.8], [-1.0, 6.0], [0.0, 200.0], [50.0, 600.0], [0.0, 1.0], [-2.31, 2.66], [-2.68, 2.18]]
-dimension_names = ["br_sascore", "ad", "logp", "tpsa", "mw", "fsp3", "fp_pc1", "fp_pc2"]
-dimension_enabled = [false, true, false, false, false, false, true, true]
 learning_rate = 0.01
 threshold_min = 0.0
+objective_cap = 0.75
+
+[[archive.dimensions]]
+name = "ad"
+resolution = 15
+range = [0.0, 0.8]
+
+[[archive.dimensions]]
+name = "fsp3"
+resolution = 30
+range = [0.0, 1.0]
 
 [emitter]
 sigma0 = 0.5
@@ -16,7 +23,6 @@ n_emitters = 16
 model_repo_id = "3BioCompBio/chembed-default"
 device = "cuda"
 latent_dim = 256
-n_seeds = 500
 seed = 42
 
 [ad]
@@ -36,31 +42,16 @@ path = "data/pca_latent.joblib"
 enabled = true
 variance_threshold = 0.99
 
-[fp_pca]
-path = "data/fp_pca.joblib"
-enabled = true
 
 [run]
-n_generations = 10
+n_generations = 15
 eval_every = 5
 seed = 42
 resume_from = ""
 
 [output]
 output_dir = "results"
-run_name = "TEST"
-
-[seeding]
-enabled = true
-data_path = "data/predictor/predictor_training_data.csv"
-smiles_col = "SMILES"
-target_col = "target"
-use_actives_only = true
-max_seeds = 2000
-dedupe_clusters = true
-cluster_threshold = 0.7
-n_cluster_emitters = 12
-seed = 42
+run_name = "TEST2"
 
 [tensorboard]
 enabled = true

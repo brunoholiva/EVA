@@ -3,17 +3,28 @@
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 from joblib import load
 
-from featurization.features import MoleculeFeaturizer
-from prediction.model_utils import move_model_to_device
+from chemistry.features import MoleculeFeaturizer
+from evaluation.model_utils import move_model_to_device
 
 if TYPE_CHECKING:
     from tabpfn import TabPFNClassifier
+
+
+@contextmanager
+def _suppress_tabpfn_progress():
+    """Suppress TabPFN's tqdm progress bars."""
+    from contextlib import redirect_stderr
+
+    # Redirect stderr to devnull to suppress tqdm
+    with redirect_stderr(open(os.devnull, "w")):
+        yield
 
 
 def _ensure_cuda_compat() -> None:
@@ -86,7 +97,10 @@ def predict_from_features(
         raise ValueError(
             f"Feature dimension mismatch: got {X.shape[1]}, model expects {expected}"
         )
-    probs = model.predict_proba(X)
+
+    # Suppress TabPFN's tqdm progress bars
+    with _suppress_tabpfn_progress():
+        probs = model.predict_proba(X)
     preds = model.classes_[probs.argmax(axis=1)]
     return preds, probs
 

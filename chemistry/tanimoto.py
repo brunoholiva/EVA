@@ -5,6 +5,35 @@ from __future__ import annotations
 import numpy as np
 
 
+def batch_max_similarity(
+    query_fps: np.ndarray,
+    cache_fps: np.ndarray,
+    cache_sums: np.ndarray,
+) -> np.ndarray:
+    """Compute maximum Tanimoto similarity to any cache molecule.
+
+    Parameters
+    ----------
+    query_fps : np.ndarray of shape ``(n_valid, fp_size)``
+        Fingerprint matrix for valid query molecules (float32).
+    cache_fps : np.ndarray of shape ``(n_cache, fp_size)``
+        Fingerprint matrix for cached reference molecules (float32).
+    cache_sums : np.ndarray of shape ``(n_cache,)``
+        Row sums of *cache_fps* (precomputed).
+
+    Returns
+    -------
+    np.ndarray of shape ``(n_valid,)``
+        Maximum Tanimoto similarity to any cache molecule for each query.
+        Values are in ``[0.0, 1.0]``.
+    """
+    batch_sum = query_fps.sum(axis=1)
+    intersection = query_fps @ cache_fps.T
+    union = batch_sum[:, None] + cache_sums[None, :] - intersection
+    tanimoto = intersection / (union + 1e-8)
+    return tanimoto.max(axis=1).astype(np.float32)
+
+
 def batch_tanimoto_topk(
     query_fps: np.ndarray,
     cache_fps: np.ndarray,

@@ -6,11 +6,12 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 
+import numpy as np
 from ribs.archives import GridArchive
 
 from config import ExperimentConfig, TensorBoardConfig
 from optimization.evaluator import EvalResult
-from optimization.plotting import create_archive_figure
+from reporting.plotting import create_archive_figure
 
 
 def _load_summary_writer_class():
@@ -75,6 +76,8 @@ class TensorBoardLogger:
         dimension_names: list[str],
         insertion_stats: dict[str, int] | None = None,
         emitter_stats: list[dict] | None = None,
+        real_objectives: dict[int, float] | None = None,
+        objective_cap: float | None = None,
     ) -> None:
         """Log generation metrics to TensorBoard."""
         if self._writer is None:
@@ -84,7 +87,7 @@ class TensorBoardLogger:
 
         if step % self._cfg.scalar_every == 0:
             self._log_result_archive_stats(report_archive, step)
-            self._log_eval_stats(result, step)
+            self._log_eval_stats(result, step, real_objectives, objective_cap)
             if insertion_stats is not None:
                 self._log_insertion_stats(insertion_stats, step)
             if emitter_stats is not None:
@@ -122,7 +125,13 @@ class TensorBoardLogger:
                 "result_archive/obj_mean", float(stats.obj_mean), step
             )
 
-    def _log_eval_stats(self, result: EvalResult, step: int) -> None:
+    def _log_eval_stats(
+        self,
+        result: EvalResult,
+        step: int,
+        real_objectives: dict[int, float] | None = None,
+        objective_cap: float | None = None,
+    ) -> None:
         """Log batch-level evaluation stats."""
         valid_fraction = 0.0
         if len(result.objectives) > 0:
@@ -140,6 +149,25 @@ class TensorBoardLogger:
             self._writer.add_scalar(
                 "eval/mean_p_active_batch", float(active.mean()), step
             )
+
+        # Log real P(active) statistics if objective cap is enabled
+        if (
+            objective_cap is not None
+            and real_objectives is not None
+            and len(real_objectives) > 0
+        ):
+            real_values = list(real_objectives.values())
+            real_array = np.array(real_values)
+            self._writer.add_scalar(
+                "eval/real_p_active_max", float(real_array.max()), step
+            )
+            self._writer.add_scalar(
+                "eval/real_p_active_mean", float(real_array.mean()), step
+            )
+            self._writer.add_scalar(
+                "eval/n_above_cap", int((real_array > objective_cap).sum()), step
+            )
+            self._writer.add_scalar("eval/n_tracked", len(real_values), step)
 
     def _log_insertion_stats(self, stats: dict[str, int], step: int) -> None:
         """Log per-generation archive insertion outcomes."""
@@ -171,7 +199,7 @@ class TensorBoardLogger:
         name_to_index = {
             name: idx for idx, name in enumerate(dimension_names[: archive.measure_dim])
         }
-        for metric_name in ["br_sascore", "logp", "tpsa", "mw", "fsp3"]:
+        for metric_name in ["logp", "tpsa", "mw", "fsp3"]:
             if metric_name not in name_to_index:
                 continue
             idx = name_to_index[metric_name]

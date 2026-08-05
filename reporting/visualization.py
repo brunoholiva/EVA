@@ -5,14 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from ribs.archives import GridArchive
-from rich.console import Console
 
-from optimization.plotting import (
+from reporting.console import saved, skipped
+from reporting.plotting import (
     configure_matplotlib_agg,
     create_archive_figure,
 )
-
-console = Console()
 
 
 def visualize_archive(
@@ -58,10 +56,10 @@ def visualize_archive(
 
     fig = create_archive_figure(archive, dimension_names)
     if fig is None:
-        console.print(f"No elites to visualize — skipped {img_path}")
+        skipped(img_path, "elites to visualize")
         return img_path
 
     fig.savefig(img_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    console.print(f"Saved archive plot → {img_path}")
+    saved("archive plot", img_path)
     return img_path

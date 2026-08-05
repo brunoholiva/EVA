@@ -1,4 +1,4 @@
-"""Per-molecule behavior computation: BR-SAScore, LogP, TPSA, MW, Morgan FP.
+"""Per-molecule behavior computation: LogP, TPSA, MW, Morgan FP.
 
 Parses each SMILES once and reuses the RDKit Mol across all properties,
 avoiding redundant parsing when multiple scorers need Mol-derived values.
@@ -12,12 +12,12 @@ import numpy as np
 from joblib import Parallel, delayed
 from rdkit import Chem
 from rdkit.Chem import Descriptors
-from rdkit.rdBase import DisableLog
 
-from featurization.morgan import compute_morgan
-from scoring.br_sascore import _get_scorer
+from chemistry.fingerprint import compute_morgan
+from reporting.suppress import suppress_joblib_warnings, suppress_rdkit_logs
 
-DisableLog("rdApp.*")
+suppress_rdkit_logs()
+suppress_joblib_warnings()
 
 
 @dataclass
@@ -26,8 +26,6 @@ class MolBehavior:
 
     Attributes
     ----------
-    br_sascore : float
-        BR-SAScore (retrosynthetic accessibility). ``nan`` if scoring failed.
     logp : float
         Wildman-Crippen LogP.
     tpsa : float
@@ -40,7 +38,6 @@ class MolBehavior:
         Morgan fingerprint as float32 array, or None if parsing failed.
     """
 
-    br_sascore: float
     logp: float
     tpsa: float
     mw: float
@@ -52,7 +49,6 @@ def compute_molecule_behavior(
     smi: str,
     radius: int = 2,
     n_bits: int = 2048,
-    compute_br_sascore: bool = True,
 ) -> MolBehavior:
     """Compute per-molecule properties from a SMILES string.
 
@@ -64,8 +60,6 @@ def compute_molecule_behavior(
         Morgan fingerprint radius.
     n_bits : int, default=2048
         Morgan fingerprint bit length.
-    compute_br_sascore : bool, default=True
-        If ``False``, skip BR-SAScore computation (leaves it as NaN).
 
     Returns
     -------
@@ -74,23 +68,11 @@ def compute_molecule_behavior(
         values and a ``None`` fingerprint.
     """
     if not smi or not smi.strip():
-        return MolBehavior(
-            float("nan"), float("nan"), float("nan"), float("nan"), float("nan"), None
-        )
+        return MolBehavior(float("nan"), float("nan"), float("nan"), float("nan"), None)
 
     mol = Chem.MolFromSmiles(smi)
     if mol is None:
-        return MolBehavior(
-            float("nan"), float("nan"), float("nan"), float("nan"), float("nan"), None
-        )
-
-    if compute_br_sascore:
-        try:
-            br, _ = _get_scorer().calculateScore(smi)
-        except Exception:
-            br = float("nan")
-    else:
-        br = float("nan")
+        return MolBehavior(float("nan"), float("nan"), float("nan"), float("nan"), None)
 
     logp = Descriptors.MolLogP(mol)
     tpsa = Descriptors.TPSA(mol)
@@ -98,9 +80,7 @@ def compute_molecule_behavior(
     fsp3 = Descriptors.FractionCSP3(mol)
     fp = compute_morgan(mol, radius=radius, fp_size=n_bits)
 
-    return MolBehavior(
-        br_sascore=br, logp=logp, tpsa=tpsa, mw=mw, fsp3=fsp3, morgan_fp=fp
-    )
+    return MolBehavior(logp=logp, tpsa=tpsa, mw=mw, fsp3=fsp3, morgan_fp=fp)
 
 
 def batch_molecule_behaviors(
@@ -108,9 +88,7 @@ def batch_molecule_behaviors(
     radius: int = 2,
     n_bits: int = 2048,
     n_jobs: int = -1,
-    compute_br_sascore: bool = True,
 ) -> tuple[
-    np.ndarray,
     np.ndarray,
     np.ndarray,
     np.ndarray,
@@ -130,13 +108,9 @@ def batch_molecule_behaviors(
         Morgan fingerprint bit length.
     n_jobs : int, default=-1
         Number of parallel workers. -1 uses all CPUs.
-    compute_br_sascore : bool, default=True
-        If ``False``, skip BR-SAScore computation in each worker.
 
     Returns
     -------
-    br : np.ndarray of shape ``(len(smiles),)``
-        BR-SAScore values.  Invalid SMILES receive NaN.
     logp : np.ndarray of shape ``(len(smiles),)``
         LogP values.  Invalid SMILES receive NaN.
     tpsa : np.ndarray of shape ``(len(smiles),)``
@@ -152,12 +126,10 @@ def batch_molecule_behaviors(
         fingerprint (used for mapping Tanimoto results back).
     """
     results = Parallel(n_jobs=n_jobs, prefer="processes")(
-        delayed(compute_molecule_behavior)(smi, radius, n_bits, compute_br_sascore)
-        for smi in smiles
+        delayed(compute_molecule_behavior)(smi, radius, n_bits) for smi in smiles
     )
 
     n = len(smiles)
-    br = np.full(n, float("nan"), dtype=np.float64)
     logp = np.full(n, float("nan"), dtype=np.float64)
     tpsa = np.full(n, float("nan"), dtype=np.float64)
     mw = np.full(n, float("nan"), dtype=np.float64)
@@ -166,7 +138,6 @@ def batch_molecule_behaviors(
     valid_fp_indices: list[int] = []
 
     for i, mb in enumerate(results):
-        br[i] = mb.br_sascore
         logp[i] = mb.logp
         tpsa[i] = mb.tpsa
         mw[i] = mb.mw
@@ -179,7 +150,7 @@ def batch_molecule_behaviors(
     valid_fp_mask[valid_fp_indices] = True
 
     if not fps_list:
-        return br, logp, tpsa, mw, fsp3, None, valid_fp_mask
+        return logp, tpsa, mw, fsp3, None, valid_fp_mask
 
     fps = np.array(fps_list, dtype=np.float32)
-    return br, logp, tpsa, mw, fsp3, fps, valid_fp_mask
+    return logp, tpsa, mw, fsp3, fps, valid_fp_mask

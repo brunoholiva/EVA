@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import numpy as np
 from ribs.archives import GridArchive
@@ -21,7 +21,6 @@ def build_scheduler(
     archive_cfg: ArchiveConfig,
     emitter_cfg: EmitterConfig,
     seed: int,
-    x0s: list[np.ndarray] | None = None,
 ) -> Scheduler:
     """Construct the pyribs scheduler from config.
 
@@ -33,9 +32,6 @@ def build_scheduler(
         Emitter sigma, batch size, and count.
     seed : int
         Random seed for reproducibility.
-    x0s : list of np.ndarray or None
-        Optional per-emitter starting points (one k-dim vector per emitter).
-        When ``None``, emitters start at random ``N(0, I)`` points.
 
     Returns
     -------
@@ -63,10 +59,7 @@ def build_scheduler(
     emitters = []
     for i in range(emitter_cfg.n_emitters):
         rng = np.random.default_rng(seed + i)
-        if x0s is not None:
-            x0 = x0s[i]
-        else:
-            x0 = rng.standard_normal(archive_cfg.solution_dim).astype(np.float64)
+        x0 = rng.standard_normal(archive_cfg.solution_dim).astype(np.float64)
         emitter = EvolutionStrategyEmitter(
             archive=archive,
             ranker="imp",
@@ -93,15 +86,25 @@ class CMAMAELoop:
         Configured pyribs scheduler.
     evaluate : callable
         Function ``(z) -> EvalResult`` that scores latent vectors.
+    objective_cap : float or None
+        If set, objectives are capped at this value before archive insertion
+        to mitigate exploitation. Invalid molecules remain at INVALID_MOLECULE_OBJECTIVE.
     """
 
-    def __init__(self, scheduler: Scheduler, evaluate) -> None:
+    def __init__(
+        self,
+        scheduler: Scheduler,
+        evaluate,
+        objective_cap: float | None = None,
+    ) -> None:
         self._scheduler = scheduler
         self._evaluate = evaluate
+        self._objective_cap = objective_cap
         self._archive: GridArchive = scheduler.archive
         self._result_archive: GridArchive | None = scheduler.result_archive
         self.last_insertion_stats: dict[str, int] | None = None
         self.last_emitter_stats: list[dict] | None = None
+        self._real_objectives: dict[int, float] = {}
 
     @property
     def archive(self) -> GridArchive:
@@ -118,24 +121,10 @@ class CMAMAELoop:
         """The underlying scheduler."""
         return self._scheduler
 
-    def seed_archive(self, z_seeds: np.ndarray) -> EvalResult:
-        """Evaluate initial seeds and add them to both archives.
-
-        Parameters
-        ----------
-        z_seeds : np.ndarray of shape ``(n, latent_dim)``
-            Latent vectors for the initial population.
-
-        Returns
-        -------
-        EvalResult
-            Scoring results for the seed population.
-        """
-        result = self._evaluate(z_seeds)
-        _add_to_archive(self._archive, z_seeds, result)
-        if self._result_archive is not None:
-            _add_to_archive(self._result_archive, z_seeds, result)
-        return result
+    @property
+    def real_objectives(self) -> dict[int, float]:
+        """Real P(active) values for solutions in the archive (uncapped)."""
+        return self._real_objectives
 
     def run(
         self,
@@ -173,10 +162,21 @@ class CMAMAELoop:
             z = self._scheduler.ask()
             result = self._evaluate(z)
 
-            self._scheduler.tell(result.objectives, result.measures)
+            objectives = self._cap_objectives(result.objectives)
+            self._scheduler.tell(objectives, result.measures)
+
+            # Track real P(active) for solutions added to archive
+            _track_real_objectives(
+                self._archive,
+                z,
+                result,
+                objectives,
+                result.p_active,
+                self._real_objectives,
+            )
 
             self.last_insertion_stats = self._compute_insertion_stats(
-                result, len(z), old_occupied
+                result, objectives, len(z), old_occupied
             )
             self.last_emitter_stats = self._compute_emitter_stats()
 
@@ -198,7 +198,11 @@ class CMAMAELoop:
         return occupied
 
     def _compute_insertion_stats(
-        self, result: EvalResult, n_total: int, old_occupied: dict[int, float]
+        self,
+        result: EvalResult,
+        objectives: np.ndarray,
+        n_total: int,
+        old_occupied: dict[int, float],
     ) -> dict[str, int]:
         """Categorise each candidate's archive insertion outcome."""
         inserted_new = 0
@@ -211,7 +215,7 @@ class CMAMAELoop:
         all_indices = self._archive.index_of(result.measures)
 
         for i in range(n_total):
-            if result.objectives[i] == INVALID_MOLECULE_OBJECTIVE:
+            if objectives[i] == INVALID_MOLECULE_OBJECTIVE:
                 rejected += 1
                 continue
 
@@ -228,7 +232,7 @@ class CMAMAELoop:
             cell_idx = int(all_indices[i])
             if cell_idx not in old_occupied:
                 inserted_new += 1
-            elif result.objectives[i] > old_occupied[cell_idx]:
+            elif objectives[i] > old_occupied[cell_idx]:
                 improved_existing += 1
             else:
                 rejected += 1
@@ -253,13 +257,48 @@ class CMAMAELoop:
             )
         return stats
 
+    def _cap_objectives(self, objectives: np.ndarray) -> np.ndarray:
+        """Cap objectives at the configured threshold.
 
-def _add_to_archive(archive: GridArchive, z: np.ndarray, result: EvalResult) -> None:
-    """Add valid candidates from *result* to *archive* one by one."""
+        Invalid molecules (INVALID_MOLECULE_OBJECTIVE) are preserved.
+        Returns a new array; the input is not modified.
+        """
+        if self._objective_cap is None:
+            return objectives
+        capped = objectives.copy()
+        valid_mask = capped != INVALID_MOLECULE_OBJECTIVE
+        capped[valid_mask] = np.minimum(capped[valid_mask], self._objective_cap)
+        return capped
+
+
+def _track_real_objectives(
+    archive: GridArchive,
+    z: np.ndarray,
+    result: EvalResult,
+    objectives: np.ndarray,
+    real_objectives_array: np.ndarray,
+    real_objectives_dict: dict[int, float],
+) -> None:
+    """Track real P(active) values for solutions that would be added to archive.
+
+    This function checks which solutions would be added to the archive and
+    tracks their real P(active) values without actually adding them (the
+    scheduler.tell() call handles that).
+    """
+    lb = archive.lower_bounds
+    ub = archive.upper_bounds
+    n_dims = archive.measure_dim
+
     for i in range(len(z)):
-        if result.objectives[i] != INVALID_MOLECULE_OBJECTIVE:
-            archive.add(
-                solution=z[i : i + 1],
-                objective=result.objectives[i : i + 1],
-                measures=result.measures[i : i + 1],
-            )
+        if objectives[i] == INVALID_MOLECULE_OBJECTIVE:
+            continue
+
+        meas = result.measures[i]
+        in_bounds = True
+        for d in range(n_dims):
+            if meas[d] < lb[d] or meas[d] > ub[d]:
+                in_bounds = False
+                break
+
+        if in_bounds and real_objectives_array[i] != INVALID_MOLECULE_OBJECTIVE:
+            real_objectives_dict[i] = float(real_objectives_array[i])

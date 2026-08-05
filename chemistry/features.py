@@ -12,8 +12,13 @@ from rich.progress import (
     TextColumn,
     TimeRemainingColumn,
 )
-from featurization.morgan import compute_morgan
 from sklearn.base import BaseEstimator, TransformerMixin
+
+from chemistry.fingerprint import compute_morgan
+from reporting.console import console
+from reporting.suppress import suppress_joblib_warnings
+
+suppress_joblib_warnings()
 
 
 N_RDKIT_DESCRIPTORS: int = 200
@@ -136,7 +141,7 @@ class MoleculeFeaturizer(BaseEstimator, TransformerMixin):
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             TimeRemainingColumn(),
         ]
-        with Progress(*columns) as progress:
+        with Progress(*columns, console=console) as progress:
             task = progress.add_task("[magenta]Featurizing molecules", total=n)
             results = Parallel(n_jobs=njobs, return_as="generator")(
                 delayed(_compute_features_batch)(batch, self.n_bits, self.radius)

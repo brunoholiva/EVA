@@ -6,10 +6,12 @@ from pathlib import Path
 
 import joblib
 import numpy as np
+
+from chemistry.fingerprint import smiles_to_morgan
+from chemistry.tanimoto import batch_tanimoto_topk
 from rdkit import RDLogger
 
-from featurization.morgan import smiles_to_morgan
-from featurization.tanimoto import batch_tanimoto_topk
+RDLogger.DisableLog("rdApp.*")
 
 N_NEIGHBORS_DEFAULT: int = 5
 
@@ -41,7 +43,6 @@ class ADScorer:
         self._n_bits: int = obj.get("n_bits", 2048)
         self._radius: int = obj.get("radius", 2)
         self._n_neighbors: int = n_neighbors
-        RDLogger.DisableLog("rdApp.*")
 
     @property
     def radius(self) -> int:
