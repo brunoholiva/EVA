@@ -166,7 +166,8 @@ class Evaluator:
     ) -> dict[str, np.ndarray]:
         """Compute CPU-bound molecular scores for valid SMILES.
 
-        Uses the dimension registry to compute all requested dimensions.
+        Parses molecules once, then computes only the enabled dimensions.
+        Fingerprints are lazily computed only if needed (e.g., for AD dimension).
 
         Parameters
         ----------
@@ -178,13 +179,21 @@ class Evaluator:
         dict of str to np.ndarray
             Dictionary mapping dimension names to computed values.
         """
-        from evaluation.dimensions import DimensionContext, compute_dimensions
+        from evaluation.dimensions import create_dimension
+        from evaluation.molecules import ParsedMolecules
 
-        ctx = DimensionContext(
-            ad_scorer=self._ad if self._ad_enabled else None,
-        )
+        parsed = ParsedMolecules(valid_smiles)
         dimension_names = self._archive_cfg.active_dimension_names()
-        return compute_dimensions(valid_smiles, dimension_names, ctx)
+        
+        dim_scores = {}
+        for dim_name in dimension_names:
+            if dim_name == "ad":
+                dimension = create_dimension(dim_name, ad_scorer=self._ad)
+            else:
+                dimension = create_dimension(dim_name)
+            dim_scores[dim_name] = dimension.compute(parsed)
+        
+        return dim_scores
 
     def _assemble(
         self,

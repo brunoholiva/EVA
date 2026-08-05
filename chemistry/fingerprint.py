@@ -103,3 +103,43 @@ def smiles_to_morgan(
     if not fps:
         return np.empty((0, fp_size), dtype=np.float32), valid_idx
     return np.array(fps, dtype=np.float32), valid_idx
+
+
+def mols_to_morgan(
+    mols: list[Chem.Mol | None],
+    radius: int = 2,
+    fp_size: int = 2048,
+) -> tuple[np.ndarray | None, np.ndarray]:
+    """Compute Morgan fingerprints from pre-parsed Mol objects.
+
+    Parameters
+    ----------
+    mols : list[Chem.Mol | None]
+        List of RDKit Mol objects (None for invalid molecules).
+    radius : int, default=2
+        Morgan fingerprint radius.
+    fp_size : int, default=2048
+        Fingerprint bit length.
+
+    Returns
+    -------
+    fps : np.ndarray of shape ``(n_valid, fp_size)`` or None
+        Fingerprints for valid molecules, or None if no valid molecules.
+    valid_mask : np.ndarray of shape ``(len(mols),)``
+        Boolean mask indicating which molecules produced valid fingerprints.
+    """
+    fps_list: list[np.ndarray] = []
+    valid_indices: list[int] = []
+    
+    for i, mol in enumerate(mols):
+        if mol is not None:
+            fp = compute_morgan(mol, radius=radius, fp_size=fp_size)
+            fps_list.append(fp)
+            valid_indices.append(i)
+    
+    valid_mask = np.zeros(len(mols), dtype=bool)
+    valid_mask[valid_indices] = True
+    
+    if fps_list:
+        return np.vstack(fps_list), valid_mask
+    return None, valid_mask

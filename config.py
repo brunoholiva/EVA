@@ -33,6 +33,8 @@ class ArchiveConfig:
             "tpsa",
             "mw",
             "fsp3",
+            "num_rotb",
+            "num_rings",
         }
         invalid_names = [d.name for d in self.dimensions if d.name not in valid_names]
         if invalid_names:
