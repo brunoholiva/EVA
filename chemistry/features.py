@@ -113,13 +113,23 @@ class MoleculeFeaturizer(BaseEstimator, TransformerMixin):
         """No-op; included for scikit-learn pipeline compatibility."""
         return self
 
-    def transform(self, X: list[str], y: np.ndarray | None = None) -> np.ndarray:
+    def transform(
+        self,
+        X: list[str],
+        y: np.ndarray | None = None,
+        progress: Progress | None = None,
+        task_id: int | None = None,
+    ) -> np.ndarray:
         """Featurise a list of SMILES into a ``(n, n_features)`` feature matrix.
 
         Parameters
         ----------
         X : list of str
             SMILES strings.
+        progress : Progress or None, default=None
+            Optional external progress bar to update. If None, creates a local bar.
+        task_id : int or None, default=None
+            Task ID in the external progress bar to update.
 
         Returns
         -------
@@ -134,15 +144,21 @@ class MoleculeFeaturizer(BaseEstimator, TransformerMixin):
         njobs = effective_n_jobs(self.n_jobs)
         batches = _chunk_list(X, njobs * 2)
 
-        columns = [
-            TextColumn("  "),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(bar_width=None, style="white", complete_style="magenta"),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            TimeRemainingColumn(),
-        ]
-        with Progress(*columns, console=console) as progress:
-            task = progress.add_task("[magenta]Featurizing molecules", total=n)
+        # Use external progress bar if provided
+        own_progress = progress is None
+        if own_progress:
+            columns = [
+                TextColumn("  "),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(bar_width=None, style="white", complete_style="magenta"),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TimeRemainingColumn(),
+            ]
+            progress = Progress(*columns, console=console)
+            task_id = progress.add_task("[magenta]Featurizing molecules", total=n)
+            progress.start()
+
+        try:
             results = Parallel(n_jobs=njobs, return_as="generator")(
                 delayed(_compute_features_batch)(batch, self.n_bits, self.radius)
                 for batch in batches
@@ -150,5 +166,8 @@ class MoleculeFeaturizer(BaseEstimator, TransformerMixin):
             parts = []
             for r in results:
                 parts.append(r)
-                progress.advance(task, advance=len(r))
+                progress.advance(task_id, advance=len(r))
             return np.vstack(parts)
+        finally:
+            if own_progress:
+                progress.stop()

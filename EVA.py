@@ -6,7 +6,6 @@ import argparse
 from pathlib import Path
 
 import numpy as np
-from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
 
 from config import ExperimentConfig
 from chemistry.features import MoleculeFeaturizer
@@ -22,7 +21,7 @@ from optimization import (
     save_scheduler,
     visualize_archive,
 )
-from reporting.console import console, detail, section, step
+from reporting.console import console, detail, make_eva_progress, section, step
 from optimization.loop import CMAMAELoop
 from evaluation.activity import load_model as load_tabpfn
 from evaluation.activity import predict_from_features
@@ -85,36 +84,42 @@ def _run_loop(
     cfg: ExperimentConfig,
     output_dir: Path,
     tb_logger: TensorBoardLogger,
+    evaluator: Evaluator,
     start_gen: int = 0,
 ) -> None:
     """Run the CMA-MAE loop with a progress bar and periodic saves."""
     eval_every = cfg.run.eval_every
     n_gen = cfg.run.n_generations
+    batch_size = cfg.emitter.batch_size * cfg.emitter.n_emitters
 
-    columns = [
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(bar_width=None, style="white", complete_style="green"),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        TextColumn("•"),
-        TextColumn("{task.fields[archive_size]} cells"),
-        TimeRemainingColumn(),
-    ]
+    # Create 3-bar layout (fastest at top)
+    progress, solutions_task, featurization_task, main_task = make_eva_progress(
+        n_gen, batch_size
+    )
 
-    with Progress(*columns, console=console, transient=True) as progress:
-        task = progress.add_task(
-            "CMA-MAE",
-            total=n_gen,
-            completed=start_gen,
-            archive_size=len(loop.archive),
-        )
+    # Wire progress bars to evaluator
+    evaluator._progress = progress
+    evaluator._solutions_task = solutions_task
+    evaluator._featurization_task = featurization_task
 
+    with progress:
         def _on_step(gen, result, archive):
             """Update progress bar every generation."""
+            # Update main bar
             progress.update(
-                task,
+                main_task,
                 completed=gen + 1,
-                archive_size=len(archive),
+                status=f"{len(archive)} cells",
             )
+            # Update featurization bar with timing info
+            if result.timings.featurize_predict > 0:
+                progress.update(
+                    featurization_task,
+                    completed=0,
+                    total=1,
+                    status=f"{result.timings.featurize_predict:.1f}s",
+                )
+            # Log to TensorBoard
             tb_logger.log_generation(
                 step=gen,
                 result=result,
@@ -145,6 +150,9 @@ def _run_loop(
             on_generation=_on_progress,
             on_step=_on_step,
             start_gen=start_gen,
+            progress=progress,
+            solutions_task=solutions_task,
+            featurization_task=featurization_task,
         )
 
 
@@ -222,6 +230,7 @@ def main(argv: list[str | None] | None = None) -> None:
             cfg,
             output_dir,
             tb_logger,
+            evaluator,
             start_gen=start_gen,
         )
 

@@ -9,6 +9,7 @@ __all__ = [
     "load_archive",
     "load_scheduler",
     "loaded",
+    "make_eva_progress",
     "make_progress_bar",
     "make_table",
     "print_generation",
@@ -25,11 +26,12 @@ __all__ = [
 
 def __getattr__(name):
     """Lazy import to avoid circular dependencies."""
-    if name in {"console", "detail", "loaded", "make_progress_bar", "make_table", "saved", "section", "skipped", "step"}:
+    if name in {"console", "detail", "loaded", "make_eva_progress", "make_progress_bar", "make_table", "saved", "section", "skipped", "step"}:
         from reporting.console import (
             console,
             detail,
             loaded,
+            make_eva_progress,
             make_progress_bar,
             make_table,
             saved,

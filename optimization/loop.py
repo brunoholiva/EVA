@@ -133,6 +133,9 @@ class CMAMAELoop:
         on_generation: GenerationCallback | None = None,
         on_step: StepCallback | None = None,
         start_gen: int = 0,
+        progress=None,
+        solutions_task: int | None = None,
+        featurization_task: int | None = None,
     ) -> GridArchive:
         """Execute the CMA-MAE loop.
 
@@ -150,6 +153,12 @@ class CMAMAELoop:
             progress bar updates).
         start_gen : int, default=0
             Generation to start from (for resuming a previous run).
+        progress : Progress or None
+            Optional shared progress bar for all metrics.
+        solutions_task : int or None
+            Task ID for solutions bar in the shared progress.
+        featurization_task : int or None
+            Task ID for featurization bar in the shared progress.
 
         Returns
         -------
@@ -159,7 +168,26 @@ class CMAMAELoop:
         for gen in range(start_gen, n_generations):
             old_occupied = self._get_occupied_cells(self._archive)
 
+            # Reset solutions bar for new generation
+            if progress is not None and solutions_task is not None:
+                progress.update(
+                    solutions_task,
+                    completed=0,
+                    status="sampling...",
+                )
+
             z = self._scheduler.ask()
+            batch_size = len(z)
+
+            # Update solutions bar after sampling
+            if progress is not None and solutions_task is not None:
+                progress.update(
+                    solutions_task,
+                    completed=0,
+                    total=batch_size,
+                    status=f"{batch_size} sampled",
+                )
+
             result = self._evaluate(z)
 
             objectives = self._cap_objectives(result.objectives)
@@ -180,6 +208,7 @@ class CMAMAELoop:
             )
             self.last_emitter_stats = self._compute_emitter_stats()
 
+            # Update main bar with archive stats
             if on_step:
                 on_step(gen, result, self._archive)
 
