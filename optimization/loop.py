@@ -21,6 +21,8 @@ def build_scheduler(
     archive_cfg: ArchiveConfig,
     emitter_cfg: EmitterConfig,
     seed: int,
+    warm_start_latents: np.ndarray | None = None,
+    warm_start_enabled: bool = False,
 ) -> Scheduler:
     """Construct the pyribs scheduler from config.
 
@@ -32,21 +34,33 @@ def build_scheduler(
         Emitter sigma, batch size, and count.
     seed : int
         Random seed for reproducibility.
+    warm_start_latents : np.ndarray or None
+        Warm-start latent vectors (top-K by P(active) from random sampling).
+        Shape ``(n_top, latent_dim)``. If provided, these are used as x0 for
+        emitters instead of random initialization.
+    warm_start_enabled : bool
+        Whether warm-start is enabled. If True, the archive is created with
+        threshold_min=0.0 to allow all solutions during warm-start phase.
+        Threshold filtering is handled by CMAMAELoop.
 
     Returns
     -------
     Scheduler
-        Configured scheduler with ``n_emitters`` EvolutionStrategyEmitters.
+        Configured scheduler with ``n_emitters`` emitters.
     """
     active_dims = archive_cfg.active_dims()
     active_ranges = archive_cfg.active_ranges()
+
+    # If warm-start is enabled, create archive with threshold_min=0.0
+    # Threshold filtering will be handled by CMAMAELoop
+    archive_threshold = 0.0 if warm_start_enabled else archive_cfg.threshold_min
 
     archive = GridArchive(
         solution_dim=archive_cfg.solution_dim,
         dims=active_dims,
         ranges=active_ranges,
         learning_rate=archive_cfg.learning_rate,
-        threshold_min=archive_cfg.threshold_min,
+        threshold_min=archive_threshold,
         seed=seed,
     )
 
@@ -57,21 +71,43 @@ def build_scheduler(
     )
 
     emitters = []
+    n_warm = (
+        min(len(warm_start_latents), emitter_cfg.n_emitters)
+        if warm_start_latents is not None
+        else 0
+    )
+
     for i in range(emitter_cfg.n_emitters):
         rng = np.random.default_rng(seed + i)
-        x0 = rng.standard_normal(archive_cfg.solution_dim).astype(np.float64)
-        emitter = EvolutionStrategyEmitter(
-            archive=archive,
-            ranker="imp",
-            es="cma_es",
-            selection_rule="mu",
-            restart_rule="basic",
-            x0=x0,
-            sigma0=emitter_cfg.sigma0,
-            bounds=None,
-            batch_size=emitter_cfg.batch_size,
-            seed=seed + i,
-        )
+
+        if i < n_warm and warm_start_latents is not None:
+            x0 = warm_start_latents[i % len(warm_start_latents)].astype(np.float64)
+            emitter = EvolutionStrategyEmitter(
+                archive=archive,
+                ranker="imp",
+                es="cma_es",
+                selection_rule="mu",
+                restart_rule="no_improvement",
+                x0=x0,
+                sigma0=emitter_cfg.sigma0,
+                bounds=None,
+                batch_size=emitter_cfg.batch_size,
+                seed=seed + i,
+            )
+        else:
+            x0 = rng.standard_normal(archive_cfg.solution_dim).astype(np.float64)
+            emitter = EvolutionStrategyEmitter(
+                archive=archive,
+                ranker="imp",
+                es="cma_es",
+                selection_rule="mu",
+                restart_rule="no_improvement",
+                x0=x0,
+                sigma0=emitter_cfg.sigma0,
+                bounds=None,
+                batch_size=emitter_cfg.batch_size,
+                seed=seed + i,
+            )
         emitters.append(emitter)
 
     return Scheduler(archive, emitters, result_archive)
@@ -89,6 +125,12 @@ class CMAMAELoop:
     objective_cap : float or None
         If set, objectives are capped at this value before archive insertion
         to mitigate exploitation. Invalid molecules remain at INVALID_MOLECULE_OBJECTIVE.
+    warm_start_n_generations : int
+        Number of generations for warm-start phase (low threshold).
+    warm_start_threshold_min : float
+        Minimum objective for archive insertion during warm-start phase.
+    threshold_min : float
+        Minimum objective for archive insertion after warm-start phase.
     """
 
     def __init__(
@@ -96,6 +138,9 @@ class CMAMAELoop:
         scheduler: Scheduler,
         evaluate,
         objective_cap: float | None = None,
+        warm_start_n_generations: int = 0,
+        warm_start_threshold_min: float = 0.0,
+        threshold_min: float = 0.0,
     ) -> None:
         self._scheduler = scheduler
         self._evaluate = evaluate
@@ -105,6 +150,11 @@ class CMAMAELoop:
         self.last_insertion_stats: dict[str, int] | None = None
         self.last_emitter_stats: list[dict] | None = None
         self._real_objectives: dict[int, float] = {}
+        self._result_real_objectives: dict[int, float] = {}
+
+        self._warm_start_n_generations = warm_start_n_generations
+        self._warm_start_threshold_min = warm_start_threshold_min
+        self._threshold_min = threshold_min
 
     @property
     def archive(self) -> GridArchive:
@@ -126,6 +176,11 @@ class CMAMAELoop:
         """Real P(active) values for solutions in the archive (uncapped)."""
         return self._real_objectives
 
+    @property
+    def result_real_objectives(self) -> dict[int, float]:
+        """Real P(active) values for solutions in the result archive (uncapped)."""
+        return self._result_real_objectives
+
     def run(
         self,
         n_generations: int,
@@ -133,9 +188,6 @@ class CMAMAELoop:
         on_generation: GenerationCallback | None = None,
         on_step: StepCallback | None = None,
         start_gen: int = 0,
-        progress=None,
-        solutions_task: int | None = None,
-        featurization_task: int | None = None,
     ) -> GridArchive:
         """Execute the CMA-MAE loop.
 
@@ -153,12 +205,6 @@ class CMAMAELoop:
             progress bar updates).
         start_gen : int, default=0
             Generation to start from (for resuming a previous run).
-        progress : Progress or None
-            Optional shared progress bar for all metrics.
-        solutions_task : int or None
-            Task ID for solutions bar in the shared progress.
-        featurization_task : int or None
-            Task ID for featurization bar in the shared progress.
 
         Returns
         -------
@@ -167,30 +213,17 @@ class CMAMAELoop:
         """
         for gen in range(start_gen, n_generations):
             old_occupied = self._get_occupied_cells(self._archive)
-
-            # Reset solutions bar for new generation
-            if progress is not None and solutions_task is not None:
-                progress.update(
-                    solutions_task,
-                    completed=0,
-                    status="sampling...",
-                )
+            old_archive_objectives = dict(old_occupied)
+            old_result_objectives = (
+                self._get_occupied_cells(self._result_archive)
+                if self._result_archive is not None
+                else {}
+            )
 
             z = self._scheduler.ask()
-            batch_size = len(z)
-
-            # Update solutions bar after sampling
-            if progress is not None and solutions_task is not None:
-                progress.update(
-                    solutions_task,
-                    completed=0,
-                    total=batch_size,
-                    status=f"{batch_size} sampled",
-                )
-
             result = self._evaluate(z)
 
-            objectives = self._cap_objectives(result.objectives)
+            objectives = self._apply_threshold_and_cap(result.objectives, gen)
             self._scheduler.tell(objectives, result.measures)
 
             # Track real P(active) for solutions added to archive
@@ -201,7 +234,20 @@ class CMAMAELoop:
                 objectives,
                 result.p_active,
                 self._real_objectives,
+                old_archive_objectives,
             )
+
+            # Track real P(active) for solutions added to result_archive
+            if self._result_archive is not None:
+                _track_real_objectives(
+                    self._result_archive,
+                    z,
+                    result,
+                    objectives,
+                    result.p_active,
+                    self._result_real_objectives,
+                    old_result_objectives,
+                )
 
             self.last_insertion_stats = self._compute_insertion_stats(
                 result, objectives, len(z), old_occupied
@@ -286,11 +332,55 @@ class CMAMAELoop:
             )
         return stats
 
+    def _apply_threshold_and_cap(self, objectives: np.ndarray, gen: int) -> np.ndarray:
+        """Apply threshold and cap to objectives based on current generation.
+
+        During warm-start phase (gen < warm_start_n_generations), uses
+        warm_start_threshold_min. After warm-start, uses threshold_min.
+        Invalid molecules (INVALID_MOLECULE_OBJECTIVE) are preserved.
+
+        Parameters
+        ----------
+        objectives : np.ndarray
+            Raw objectives from evaluator.
+        gen : int
+            Current generation number.
+
+        Returns
+        -------
+        np.ndarray
+            Filtered and capped objectives.
+        """
+        if self._objective_cap is None:
+            thresholded = objectives.copy()
+        else:
+            thresholded = objectives.copy()
+            valid_mask = thresholded != INVALID_MOLECULE_OBJECTIVE
+            thresholded[valid_mask] = np.minimum(
+                thresholded[valid_mask], self._objective_cap
+            )
+
+        # Apply threshold based on warm-start phase
+        if gen < self._warm_start_n_generations:
+            current_threshold = self._warm_start_threshold_min
+        else:
+            current_threshold = self._threshold_min
+
+        if current_threshold > 0:
+            valid_mask = thresholded != INVALID_MOLECULE_OBJECTIVE
+            below_threshold = thresholded < current_threshold
+            thresholded[valid_mask & below_threshold] = INVALID_MOLECULE_OBJECTIVE
+
+        return thresholded
+
     def _cap_objectives(self, objectives: np.ndarray) -> np.ndarray:
         """Cap objectives at the configured threshold.
 
         Invalid molecules (INVALID_MOLECULE_OBJECTIVE) are preserved.
         Returns a new array; the input is not modified.
+
+        .. deprecated::
+            Use :meth:`_apply_threshold_and_cap` instead.
         """
         if self._objective_cap is None:
             return objectives
@@ -307,17 +397,40 @@ def _track_real_objectives(
     objectives: np.ndarray,
     real_objectives_array: np.ndarray,
     real_objectives_dict: dict[int, float],
+    old_archive_objectives: dict[int, float],
 ) -> None:
-    """Track real P(active) values for solutions that would be added to archive.
+    """Track real P(active) values for solutions actually accepted into archive.
 
-    This function checks which solutions would be added to the archive and
-    tracks their real P(active) values without actually adding them (the
-    scheduler.tell() call handles that).
+    Compares archive state before and after tell() to identify cells that were
+    updated (new or strictly improved). For each updated cell, records the real
+    objective of the best batch solution mapping to that cell.
+
+    The dict is keyed by archive cell index (not batch index) so it can be
+    looked up correctly when exporting the archive.
     """
     lb = archive.lower_bounds
     ub = archive.upper_bounds
     n_dims = archive.measure_dim
 
+    # Get new archive state after tell()
+    new_archive_objectives: dict[int, float] = {}
+    if len(archive) > 0:
+        data = archive.data()
+        for idx, obj in zip(data["index"], data["objective"]):
+            new_archive_objectives[int(idx)] = float(obj)
+
+    # Find cells that were updated (new or strictly improved)
+    updated_cells: set[int] = set()
+    for cell_idx, new_obj in new_archive_objectives.items():
+        old_obj = old_archive_objectives.get(cell_idx)
+        if old_obj is None or new_obj > old_obj + 1e-9:
+            updated_cells.add(cell_idx)
+
+    if not updated_cells:
+        return
+
+    # Group batch solutions by cell index
+    solutions_by_cell: dict[int, list[int]] = {}
     for i in range(len(z)):
         if objectives[i] == INVALID_MOLECULE_OBJECTIVE:
             continue
@@ -329,5 +442,19 @@ def _track_real_objectives(
                 in_bounds = False
                 break
 
-        if in_bounds and real_objectives_array[i] != INVALID_MOLECULE_OBJECTIVE:
-            real_objectives_dict[i] = float(real_objectives_array[i])
+        if not (in_bounds and real_objectives_array[i] != INVALID_MOLECULE_OBJECTIVE):
+            continue
+
+        cell_idx = archive.index_of_single(meas)
+        if cell_idx < 0:
+            continue
+
+        if cell_idx in updated_cells:
+            if cell_idx not in solutions_by_cell:
+                solutions_by_cell[cell_idx] = []
+            solutions_by_cell[cell_idx].append(i)
+
+    # For each updated cell, find the best solution (highest capped objective)
+    for cell_idx, batch_indices in solutions_by_cell.items():
+        best_idx = max(batch_indices, key=lambda i: objectives[i])
+        real_objectives_dict[cell_idx] = float(real_objectives_array[best_idx])

@@ -21,7 +21,7 @@ from optimization import (
     save_scheduler,
     visualize_archive,
 )
-from reporting.console import console, detail, make_eva_progress, section, step
+from reporting.console import console, detail, make_progress_bar, section, step
 from optimization.loop import CMAMAELoop
 from evaluation.activity import load_model as load_tabpfn
 from evaluation.activity import predict_from_features
@@ -90,35 +90,15 @@ def _run_loop(
     """Run the CMA-MAE loop with a progress bar and periodic saves."""
     eval_every = cfg.run.eval_every
     n_gen = cfg.run.n_generations
-    batch_size = cfg.emitter.batch_size * cfg.emitter.n_emitters
 
-    # Create 3-bar layout (fastest at top)
-    progress, solutions_task, featurization_task, main_task = make_eva_progress(
-        n_gen, batch_size
-    )
-
-    # Wire progress bars to evaluator
-    evaluator._progress = progress
-    evaluator._solutions_task = solutions_task
-    evaluator._featurization_task = featurization_task
+    # Simple progress bar for generations only
+    progress, task_id = make_progress_bar("CMA-MAE", n_gen)
 
     with progress:
+
         def _on_step(gen, result, archive):
             """Update progress bar every generation."""
-            # Update main bar
-            progress.update(
-                main_task,
-                completed=gen + 1,
-                status=f"{len(archive)} cells",
-            )
-            # Update featurization bar with timing info
-            if result.timings.featurize_predict > 0:
-                progress.update(
-                    featurization_task,
-                    completed=0,
-                    total=1,
-                    status=f"{result.timings.featurize_predict:.1f}s",
-                )
+            progress.update(task_id, completed=gen + 1)
             # Log to TensorBoard
             tb_logger.log_generation(
                 step=gen,
@@ -150,9 +130,6 @@ def _run_loop(
             on_generation=_on_progress,
             on_step=_on_step,
             start_gen=start_gen,
-            progress=progress,
-            solutions_task=solutions_task,
-            featurization_task=featurization_task,
         )
 
 
@@ -177,7 +154,7 @@ def _save_results(
             output_dir,
             suffix="result_archive",
             dimension_names=dimension_names,
-            real_objectives=loop.real_objectives,
+            real_objectives=loop.result_real_objectives,
         )
     save_scheduler(loop.scheduler, output_dir)
     visualize_archive(
@@ -185,6 +162,64 @@ def _save_results(
         output_dir,
         dimension_names=dimension_names,
     )
+
+
+def _warm_start(
+    vae: ChemBedVAE | ProjectedVAE,
+    evaluator: Evaluator,
+    cfg: ExperimentConfig,
+) -> np.ndarray | None:
+    """Sample random latent vectors and return top-K by P(active) as warm-start.
+
+    Parameters
+    ----------
+    vae : ChemBedVAE or ProjectedVAE
+        The generative model.
+    evaluator : Evaluator
+        The scoring pipeline.
+    cfg : ExperimentConfig
+        Experiment configuration.
+
+    Returns
+    -------
+    np.ndarray or None
+        Top-K latent vectors by P(active), shape (n_top, latent_dim).
+        Returns None if warm-start is disabled or no valid molecules found.
+    """
+    if not cfg.warm_start.enabled:
+        return None
+
+    section("Warm-Start Initialization")
+    n_samples = cfg.warm_start.n_samples
+    n_top = cfg.warm_start.n_top
+    latent_dim = cfg.archive.solution_dim
+
+    step(f"Sampling {n_samples} random latent vectors")
+    rng = np.random.default_rng(cfg.run.seed)
+    z_candidates = rng.standard_normal((n_samples, latent_dim))
+
+    step("Evaluating candidates")
+    result = evaluator(z_candidates)
+
+    valid_mask = result.p_active > 0
+    n_valid = int(valid_mask.sum())
+    detail(f"Valid molecules: {n_valid}/{n_samples} ({100 * n_valid / n_samples:.1f}%)")
+
+    if n_valid == 0:
+        detail("No valid molecules found, skipping warm-start")
+        return None
+
+    valid_indices = np.where(valid_mask)[0]
+    valid_p_active = result.p_active[valid_mask]
+
+    top_k = min(n_top, n_valid)
+    top_indices = valid_indices[np.argsort(valid_p_active)[-top_k:][::-1]]
+    top_latents = z_candidates[top_indices]
+
+    detail(f"Top-{top_k} P(active): [{result.p_active[top_indices].min():.4f}, "
+           f"{result.p_active[top_indices].max():.4f}]")
+
+    return top_latents
 
 
 def main(argv: list[str | None] | None = None) -> None:
@@ -217,11 +252,25 @@ def main(argv: list[str | None] | None = None) -> None:
         scheduler = load_scheduler(resume_from)
         start_gen = scheduler.emitters[0]._itrs
         detail(f"Resuming from generation {start_gen}")
+        warm_start_latents = None
     else:
-        scheduler = build_scheduler(cfg.archive, cfg.emitter, cfg.run.seed)
+        warm_start_latents = _warm_start(vae, evaluator, cfg)
+
+        scheduler = build_scheduler(
+            cfg.archive, cfg.emitter, cfg.run.seed,
+            warm_start_latents=warm_start_latents,
+            warm_start_enabled=cfg.warm_start.enabled,
+        )
         start_gen = 0
 
-    loop = CMAMAELoop(scheduler, evaluator, objective_cap=cfg.archive.objective_cap)
+    loop = CMAMAELoop(
+        scheduler,
+        evaluator,
+        objective_cap=cfg.archive.objective_cap,
+        warm_start_n_generations=cfg.warm_start.n_generations if cfg.warm_start.enabled else 0,
+        warm_start_threshold_min=cfg.warm_start.threshold_min if cfg.warm_start.enabled else cfg.archive.threshold_min,
+        threshold_min=cfg.archive.threshold_min,
+    )
 
     try:
         section("Running CMA-MAE")

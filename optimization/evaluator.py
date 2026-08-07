@@ -71,12 +71,6 @@ class Evaluator:
         Feature transform matching the TabPFN training config.
     archive_cfg : ArchiveConfig
         Archive dimension configuration (names, enabled flags).
-    progress : Progress or None
-        Optional shared progress bar for all metrics.
-    solutions_task : int or None
-        Task ID for solutions bar in the shared progress.
-    featurization_task : int or None
-        Task ID for featurization bar in the shared progress.
     """
 
     def __init__(
@@ -87,9 +81,6 @@ class Evaluator:
         activity_model=None,
         featurizer=None,
         archive_cfg: ArchiveConfig | None = None,
-        progress=None,
-        solutions_task: int | None = None,
-        featurization_task: int | None = None,
     ) -> None:
         self._decode_fn = decode
         self._ad = ad
@@ -100,9 +91,6 @@ class Evaluator:
         self._enabled_indices = list(range(len(archive_cfg.dimensions)))
         enabled_names = archive_cfg.active_dimension_names()
         self._ad_enabled = "ad" in enabled_names
-        self._progress = progress
-        self._solutions_task = solutions_task
-        self._featurization_task = featurization_task
 
     @property
     def decode_fn(self):
@@ -130,38 +118,14 @@ class Evaluator:
         smiles_list = self._decode_fn(z)
         timings.decode = time.time() - t1
 
-        # Update solutions bar after decode
-        if self._progress is not None and self._solutions_task is not None:
-            self._progress.update(
-                self._solutions_task,
-                completed=n,
-                status=f"{n} decoded",
-            )
-
         t1 = time.time()
         valid_mask = _validity_mask(smiles_list)
         timings.validity = time.time() - t1
         valid_smiles = [s for s, v in zip(smiles_list, valid_mask) if v]
         n_valid = int(valid_mask.sum())
 
-        # Update solutions bar after validation
-        if self._progress is not None and self._solutions_task is not None:
-            self._progress.update(
-                self._solutions_task,
-                completed=n_valid,
-                status=f"{n_valid} valid",
-            )
-
         scores = self._score_valid(valid_smiles, timings)
         result = self._assemble(n, valid_mask, smiles_list, scores)
-
-        # Update solutions bar after full evaluation
-        if self._progress is not None and self._solutions_task is not None:
-            self._progress.update(
-                self._solutions_task,
-                completed=n_valid,
-                status=f"{n_valid} evaluated",
-            )
 
         result.gen_time = time.time() - t0
         result.timings = timings
@@ -181,11 +145,7 @@ class Evaluator:
 
         # Phase 1: featurization only (descriptastorus is the bottleneck)
         t1 = time.time()
-        X = self._featurizer.transform(
-            valid_smiles,
-            progress=self._progress,
-            task_id=self._featurization_task,
-        )
+        X = self._featurizer.transform(valid_smiles)
         timings.featurize_predict = time.time() - t1
 
         # Phase 2: CPU scorers + TabPFN GPU concurrently

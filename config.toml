@@ -1,8 +1,8 @@
 [archive]
 solution_dim = 256
 learning_rate = 0.01
-threshold_min = 0.0
-objective_cap = 0.75
+threshold_min = 0.4
+objective_cap = 0.8
 
 [[archive.dimensions]]
 name = "ad"
@@ -13,6 +13,7 @@ range = [0.0, 0.8]
 name = "fsp3"
 resolution = 30
 range = [0.0, 1.0]
+
 
 [emitter]
 sigma0 = 0.5
@@ -42,16 +43,23 @@ path = "data/pca_latent.joblib"
 enabled = true
 variance_threshold = 0.99
 
+[warm_start]
+enabled = true
+n_samples = 10000
+n_top = 16
+n_generations = 50
+threshold_min = 0.0
+
 
 [run]
-n_generations = 15
-eval_every = 5
+n_generations = 1000
+eval_every = 20
 seed = 42
 resume_from = ""
 
 [output]
 output_dir = "results"
-run_name = "TEST2"
+run_name = "TEST5"
 
 [tensorboard]
 enabled = true

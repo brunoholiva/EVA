@@ -103,7 +103,8 @@ def _export_archive_csv(
 
     # Add real P(active) if available
     if real_objectives is not None:
-        data["p_active_real"] = [real_objectives.get(idx, np.nan) for idx in order]
+        cell_indices = arch_data["index"][order]
+        data["p_active_real"] = [real_objectives.get(idx, np.nan) for idx in cell_indices]
     else:
         data["p_active_real"] = [np.nan] * len(order)
 

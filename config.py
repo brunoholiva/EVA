@@ -109,6 +109,15 @@ class PCALatentConfig:
 
 
 @dataclass
+class WarmStartConfig:
+    enabled: bool = False
+    n_samples: int = 10000
+    n_top: int = 16
+    n_generations: int = 50
+    threshold_min: float = 0.0
+
+
+@dataclass
 class TensorBoardConfig:
     enabled: bool = False
     log_dir: str = "tensorboard"
@@ -127,6 +136,7 @@ class ExperimentConfig:
     run: RunConfig
     output: OutputConfig
     pca: PCALatentConfig = field(default_factory=PCALatentConfig)
+    warm_start: WarmStartConfig = field(default_factory=WarmStartConfig)
     tensorboard: TensorBoardConfig = field(default_factory=TensorBoardConfig)
 
     @classmethod
@@ -164,6 +174,7 @@ class ExperimentConfig:
             run=RunConfig(**raw.get("run", {})),
             output=OutputConfig(**raw.get("output", output_defaults)),
             pca=PCALatentConfig(**raw.get("pca", {})),
+            warm_start=WarmStartConfig(**raw.get("warm_start", {})),
             tensorboard=TensorBoardConfig(**raw.get("tensorboard", {})),
         )
         config.archive.validate()

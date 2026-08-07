@@ -109,7 +109,7 @@ def skipped(path: str | Path, reason: str) -> None:
     console.print(f"Skipped {path}: no {reason}")
 
 
-def make_progress_bar(description: str, total: int) -> Progress:
+def make_progress_bar(description: str, total: int) -> tuple[Progress, int]:
     """Create a styled progress bar with consistent formatting.
 
     Parameters
@@ -121,8 +121,8 @@ def make_progress_bar(description: str, total: int) -> Progress:
 
     Returns
     -------
-    Progress
-        A configured Progress instance ready to use.
+    tuple[Progress, int]
+        A configured Progress instance and the task ID.
     """
     columns = [
         TextColumn("  "),
@@ -132,8 +132,8 @@ def make_progress_bar(description: str, total: int) -> Progress:
         TimeRemainingColumn(),
     ]
     progress = Progress(*columns, console=console)
-    progress.add_task(description, total=total)
-    return progress
+    task_id = progress.add_task(description, total=total)
+    return progress, task_id
 
 
 def make_eva_progress(
