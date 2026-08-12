@@ -162,13 +162,12 @@ class Evaluator:
         pa = probs[:, 1]
         return _ScoreBundle(dim_scores=dim_scores, pa=pa)
 
-    def _compute_cpu_scores(
-        self, valid_smiles: list[str]
-    ) -> dict[str, np.ndarray]:
+    def _compute_cpu_scores(self, valid_smiles: list[str]) -> dict[str, np.ndarray]:
         """Compute CPU-bound molecular scores for valid SMILES.
 
         Parses molecules once, then computes only the enabled dimensions.
         Fingerprints are lazily computed only if needed (e.g., for AD dimension).
+        Scaffold-based dimensions use Murcko scaffold SMILES instead.
 
         Parameters
         ----------
@@ -184,16 +183,27 @@ class Evaluator:
         from evaluation.molecules import ParsedMolecules
 
         parsed = ParsedMolecules(valid_smiles)
-        dimension_names = self._archive_cfg.active_dimension_names()
-        
+        dim_configs = {d.name: d for d in self._archive_cfg.dimensions}
+
         dim_scores = {}
-        for dim_name in dimension_names:
+        for dim_name in self._archive_cfg.active_dimension_names():
+            use_scaffold = dim_configs[dim_name].scaffold
+
+            if use_scaffold:
+                scaffold_smiles = [
+                    s if s is not None else smi
+                    for s, smi in zip(parsed.scaffold_smiles, valid_smiles)
+                ]
+                compute_parsed = ParsedMolecules(scaffold_smiles)
+            else:
+                compute_parsed = parsed
+
             if dim_name == "ad":
                 dimension = create_dimension(dim_name, ad_scorer=self._ad)
             else:
                 dimension = create_dimension(dim_name)
-            dim_scores[dim_name] = dimension.compute(parsed)
-        
+            dim_scores[dim_name] = dimension.compute(compute_parsed)
+
         return dim_scores
 
     def _assemble(
@@ -208,7 +218,7 @@ class Evaluator:
         n_active = len(self._enabled_indices)
         measures = np.zeros((n, n_active), dtype=np.float64)
         p_active = np.zeros(n, dtype=np.float64)
-        
+
         dim_arrays = {}
         for dim_name in self._archive_cfg.active_dimension_names():
             dim_arrays[dim_name] = np.full(n, np.nan, dtype=np.float64)
@@ -220,7 +230,7 @@ class Evaluator:
 
             objectives[kept] = scores.pa[accept]
             p_active[kept] = scores.pa[accept]
-            
+
             for k, dim_idx in enumerate(self._enabled_indices):
                 dim_name = self._archive_cfg.dimensions[dim_idx].name
                 measures[kept, k] = scores.dim_scores[dim_name][accept]
