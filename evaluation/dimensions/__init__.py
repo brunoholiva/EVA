@@ -10,6 +10,7 @@ from evaluation.dimensions.mw import Mordimension
 from evaluation.dimensions.num_rotb import NumRotBDimension
 from evaluation.dimensions.tpsa import TPSADimension
 from evaluation.dimensions.num_rings import NumRingDimension
+from evaluation.dimensions.balabanj import BalabanJDimension
 
 
 __all__ = [
@@ -21,6 +22,7 @@ __all__ = [
     "Fsp3Dimension",
     "NumRotBDimension",
     "NumRingDimension",
+    "BalabanJDimension",
     "DIMENSION_REGISTRY",
 ]
 
@@ -32,6 +34,7 @@ DIMENSION_REGISTRY = {
     "fsp3": Fsp3Dimension(),
     "num_rotb": NumRotBDimension(),
     "num_rings": NumRingDimension(),
+    "balabanj": BalabanJDimension(),
 }
 
 
