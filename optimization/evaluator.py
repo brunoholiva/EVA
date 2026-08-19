@@ -32,6 +32,8 @@ class EvalTimings:
     featurize_predict: float = 0.0
     cpu_scorers: float = 0.0
     assemble: float = 0.0
+    total: float = 0.0
+    archive_ops: float = 0.0
 
 
 @dataclass
@@ -125,7 +127,10 @@ class Evaluator:
         n_valid = int(valid_mask.sum())
 
         scores = self._score_valid(valid_smiles, timings)
+
+        t1 = time.time()
         result = self._assemble(n, valid_mask, smiles_list, scores)
+        timings.assemble = time.time() - t1
 
         result.gen_time = time.time() - t0
         result.timings = timings
@@ -143,12 +148,10 @@ class Evaluator:
         if not valid_smiles:
             return None
 
-        # Phase 1: featurization only (descriptastorus is the bottleneck)
         t1 = time.time()
         X = self._featurizer.transform(valid_smiles)
         timings.featurize_predict = time.time() - t1
 
-        # Phase 2: CPU scorers + TabPFN GPU concurrently
         t1 = time.time()
         from concurrent.futures import ThreadPoolExecutor
 
@@ -235,6 +238,18 @@ class Evaluator:
                 dim_name = self._archive_cfg.dimensions[dim_idx].name
                 measures[kept, k] = scores.dim_scores[dim_name][accept]
                 dim_arrays[dim_name][kept] = scores.dim_scores[dim_name][accept]
+
+            # pyribs requires finite measures. Some valid molecules (e.g. those
+            # containing metals like Na/Li/Mg) make certain descriptors return
+            # NaN (BCUT2D_* raise on Gasteiger charge failure). Treat them like
+            # invalid molecules: rejected by the objective, finite sentinel so
+            # the whole-batch validation in GridArchive.add() passes.
+            non_finite = ~np.isfinite(measures[kept]).all(axis=1)
+            if non_finite.any():
+                bad_idx = kept[non_finite]
+                objectives[bad_idx] = INVALID_MOLECULE_OBJECTIVE
+                p_active[bad_idx] = 0.0
+                measures[bad_idx] = 0.0
 
         return EvalResult(
             smiles=smiles_list,

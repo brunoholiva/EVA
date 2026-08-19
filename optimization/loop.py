@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 
 import numpy as np
@@ -15,6 +16,28 @@ from optimization.evaluator import EvalResult
 
 GenerationCallback = Callable[[int, EvalResult, GridArchive], None]
 StepCallback = Callable[[int, EvalResult, GridArchive], None]
+
+
+class _SafeEvolutionStrategyEmitter(EvolutionStrategyEmitter):
+    """EvolutionStrategyEmitter with empty-archive restart guard.
+
+    Pyribs' default restart path calls ``archive.sample_elites(1)`` without
+    checking whether the archive is empty.  With a high ``threshold_min``,
+    the archive may be empty for several generations, causing an
+    ``IndexError`` on the first restart.  This subclass catches that error
+    and falls back to a random Gaussian draw instead.
+    """
+
+    def tell(self, solution, objective, measures, add_info=(), **fields):
+        try:
+            super().tell(
+                solution, objective, measures, add_info=add_info, **fields
+            )
+        except IndexError:
+            rng = np.random.default_rng(self._restarts)
+            self._opt.reset(rng.standard_normal(self._solution_dim))
+            self._ranker.reset(self, self.archive)
+            self._restarts += 1
 
 
 def build_scheduler(
@@ -68,6 +91,8 @@ def build_scheduler(
         solution_dim=archive_cfg.solution_dim,
         dims=active_dims,
         ranges=active_ranges,
+        learning_rate=1.0,
+        threshold_min=0.0,
     )
 
     emitters = []
@@ -82,7 +107,7 @@ def build_scheduler(
 
         if i < n_warm and warm_start_latents is not None:
             x0 = warm_start_latents[i % len(warm_start_latents)].astype(np.float64)
-            emitter = EvolutionStrategyEmitter(
+            emitter = _SafeEvolutionStrategyEmitter(
                 archive=archive,
                 ranker="imp",
                 es="cma_es",
@@ -96,7 +121,7 @@ def build_scheduler(
             )
         else:
             x0 = rng.standard_normal(archive_cfg.solution_dim).astype(np.float64)
-            emitter = EvolutionStrategyEmitter(
+            emitter = _SafeEvolutionStrategyEmitter(
                 archive=archive,
                 ranker="imp",
                 es="cma_es",
@@ -212,6 +237,7 @@ class CMAMAELoop:
             The final archive of scored candidates.
         """
         for gen in range(start_gen, n_generations):
+            t_archive_start = time.time()
             old_occupied = self._get_occupied_cells(self._archive)
             old_archive_objectives = dict(old_occupied)
             old_result_objectives = (
@@ -253,6 +279,9 @@ class CMAMAELoop:
                 result, objectives, len(z), old_occupied
             )
             self.last_emitter_stats = self._compute_emitter_stats()
+            
+            if result.timings is not None:
+                result.timings.archive_ops = time.time() - t_archive_start
 
             # Update main bar with archive stats
             if on_step:

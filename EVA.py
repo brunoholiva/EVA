@@ -85,6 +85,7 @@ def _run_loop(
     output_dir: Path,
     tb_logger: TensorBoardLogger,
     evaluator: Evaluator,
+    vae: ChemBedVAE | ProjectedVAE,
     start_gen: int = 0,
 ) -> None:
     """Run the CMA-MAE loop with a progress bar and periodic saves."""
@@ -123,6 +124,15 @@ def _run_loop(
                         f"feat={t.featurize_predict:.1f}s cpu={t.cpu_scorers:.1f}s"
                     )
                 save_scheduler(loop.scheduler, output_dir)
+                if gen == 0:
+                    save_archive(
+                        loop.archive,
+                        vae.decode,
+                        output_dir,
+                        suffix="archive_gen0",
+                        dimension_names=cfg.archive.active_dimension_names(),
+                        real_objectives=loop.real_objectives,
+                    )
 
         loop.run(
             n_generations=n_gen,
@@ -280,6 +290,7 @@ def main(argv: list[str | None] | None = None) -> None:
             output_dir,
             tb_logger,
             evaluator,
+            vae,
             start_gen=start_gen,
         )
 
