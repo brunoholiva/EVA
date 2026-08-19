@@ -1,22 +1,25 @@
 [archive]
 solution_dim = 256
 learning_rate = 0.01
-threshold_min = 0.4
-objective_cap = 0.8
+threshold_min = 0.3
+objective_cap = 0.95
 
 [[archive.dimensions]]
-name = "ad"
+name = "bcut2d_logplow"
 resolution = 15
-range = [0.0, 0.8]
+range = [-3.2, -1.7]
+scaffold = false
+
 
 [[archive.dimensions]]
-name = "fsp3"
-resolution = 30
-range = [0.0, 1.0]
+name = "vsa_estate2"
+resolution = 15
+range = [-1.0, 60.0]
+scaffold = false
 
 
 [emitter]
-sigma0 = 0.5
+sigma0 = 1.5
 batch_size = 32
 n_emitters = 16
 
@@ -44,22 +47,22 @@ enabled = true
 variance_threshold = 0.99
 
 [warm_start]
-enabled = true
-n_samples = 10000
+enabled = false
+n_samples = 100
 n_top = 16
 n_generations = 50
 threshold_min = 0.0
 
 
 [run]
-n_generations = 1000
+n_generations = 500
 eval_every = 20
 seed = 42
 resume_from = ""
 
 [output]
 output_dir = "results"
-run_name = "TEST5"
+run_name = "vsa2_bcut2_sigma"
 
 [tensorboard]
 enabled = true

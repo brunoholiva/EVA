@@ -12,6 +12,7 @@ class DimensionConfig:
     name: str
     resolution: int
     range: tuple[float, float]
+    scaffold: bool = False
 
 
 @dataclass
@@ -35,6 +36,9 @@ class ArchiveConfig:
             "fsp3",
             "num_rotb",
             "num_rings",
+            "balabanj",
+            "vsa_estate2",
+            "bcut2d_logplow",
         }
         invalid_names = [d.name for d in self.dimensions if d.name not in valid_names]
         if invalid_names:
@@ -146,7 +150,7 @@ class ExperimentConfig:
             raw = toml.load(f)
 
         output_defaults = {"output_dir": "results", "run_name": "default"}
-        
+
         archive_raw = raw.get("archive", {})
         dimensions_raw = archive_raw.pop("dimensions", [])
         dimensions = [
@@ -154,6 +158,7 @@ class ExperimentConfig:
                 name=d["name"],
                 resolution=d["resolution"],
                 range=tuple(d["range"]),
+                scaffold=d.get("scaffold", False),
             )
             for d in dimensions_raw
         ]
@@ -164,7 +169,7 @@ class ExperimentConfig:
             threshold_min=archive_raw["threshold_min"],
             objective_cap=archive_raw.get("objective_cap"),
         )
-        
+
         config = cls(
             archive=archive,
             emitter=EmitterConfig(**raw.get("emitter", {})),

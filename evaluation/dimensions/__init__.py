@@ -11,6 +11,8 @@ from evaluation.dimensions.num_rotb import NumRotBDimension
 from evaluation.dimensions.tpsa import TPSADimension
 from evaluation.dimensions.num_rings import NumRingDimension
 from evaluation.dimensions.balabanj import BalabanJDimension
+from evaluation.dimensions.vsa_estate2 import VSAEState2Dimension
+from evaluation.dimensions.bcut2d_logplow import BCUT2D_LOGPLOWDimension
 
 
 __all__ = [
@@ -23,6 +25,8 @@ __all__ = [
     "NumRotBDimension",
     "NumRingDimension",
     "BalabanJDimension",
+    "BCUT2D_LOGPLOWDimension",
+    "VSAEState2Dimension",
     "DIMENSION_REGISTRY",
 ]
 
@@ -35,6 +39,8 @@ DIMENSION_REGISTRY = {
     "num_rotb": NumRotBDimension(),
     "num_rings": NumRingDimension(),
     "balabanj": BalabanJDimension(),
+    "vsa_estate2": VSAEState2Dimension(),
+    "bcut2d_logplow": BCUT2D_LOGPLOWDimension(),
 }
 
 
