@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 from ribs.archives import GridArchive
 
 from reporting.console import console, make_table, section
-from optimization.evaluator import EvalResult
+
+if TYPE_CHECKING:
+    from optimization.evaluator import EvalResult
 
 
 def print_generation(

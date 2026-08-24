@@ -7,7 +7,6 @@ from pathlib import Path
 import joblib
 import numpy as np
 
-from chemistry.fingerprint import smiles_to_morgan
 from chemistry.tanimoto import batch_tanimoto_topk
 from rdkit import RDLogger
 
@@ -85,30 +84,3 @@ class ADScorer:
         return batch_tanimoto_topk(
             fps, self._train_fps, self._train_sum, self._n_neighbors
         )
-
-    def __call__(self, smiles: list[str]) -> np.ndarray:
-        """Score a batch of SMILES strings.
-
-        Parameters
-        ----------
-        smiles : list of str
-            SMILES strings to score.
-
-        Returns
-        -------
-        np.ndarray of shape ``(len(smiles),)``
-            Mean Tanimoto distance to k nearest training neighbors.
-            Invalid SMILES get a default distance of 1.0.
-        """
-        fps, valid_idx = smiles_to_morgan(
-            smiles, radius=self._radius, fp_size=self._n_bits
-        )
-
-        scores = np.ones(len(smiles), dtype=np.float32)
-        if len(fps) == 0:
-            return scores
-
-        dist = self.compute_from_fps(fps)
-        for i, d in zip(valid_idx, dist):
-            scores[i] = d
-        return scores

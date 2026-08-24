@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 from joblib import load
 
-from chemistry.features import MoleculeFeaturizer
 from evaluation.model_utils import move_model_to_device
 
 if TYPE_CHECKING:
@@ -103,28 +102,3 @@ def predict_from_features(
         probs = model.predict_proba(X)
     preds = model.classes_[probs.argmax(axis=1)]
     return preds, probs
-
-
-def predict(
-    smiles: list[str], model: TabPFNClassifier, featurizer: MoleculeFeaturizer
-) -> tuple[np.ndarray, np.ndarray]:
-    """Predict labels and probabilities for a list of SMILES.
-
-    Parameters
-    ----------
-    smiles : list of str
-        SMILES strings.
-    model : TabPFNClassifier
-        Fitted classifier.
-    featurizer : MoleculeFeaturizer
-        Featurizer with the same configuration used during training.
-
-    Returns
-    -------
-    preds : np.ndarray of shape ``(n,)``
-        Predicted class labels (0 or 1).
-    probs : np.ndarray of shape ``(n, 2)``
-        Predicted class probabilities.
-    """
-    X = featurizer.transform(smiles)
-    return predict_from_features(X, model)

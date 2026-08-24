@@ -136,65 +136,6 @@ def make_progress_bar(description: str, total: int) -> tuple[Progress, int]:
     return progress, task_id
 
 
-def make_eva_progress(
-    n_generations: int,
-    batch_size: int,
-) -> tuple[Progress, int, int, int]:
-    """Create the 3-bar progress layout for EVA.
-
-    Creates 3 persistent progress bars ordered fastest to slowest:
-    1. Solutions (fastest) - tracks solutions evaluated within each generation
-    2. Featurization (medium) - tracks molecules featurized for predictor
-    3. CMA-MAE (slowest) - tracks generations
-
-    Parameters
-    ----------
-    n_generations : int
-        Total number of generations to run.
-    batch_size : int
-        Total number of solutions per generation (batch_size * n_emitters).
-
-    Returns
-    -------
-    tuple[Progress, int, int, int]
-        Progress instance and task IDs for (solutions, featurization, main).
-    """
-    columns = [
-        TextColumn("  "),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(bar_width=None, style="white", complete_style="green"),
-        TextColumn("{task.completed}/{task.total}"),
-        TextColumn("•"),
-        TextColumn("{task.fields[status]}"),
-        TimeRemainingColumn(),
-    ]
-
-    progress = Progress(*columns, console=console)
-
-    solutions_task = progress.add_task(
-        "Solutions",
-        total=batch_size,
-        completed=0,
-        status="0 valid",
-    )
-
-    featurization_task = progress.add_task(
-        "Featurization",
-        total=100,
-        completed=0,
-        status="0 molecules",
-    )
-
-    main_task = progress.add_task(
-        "CMA-MAE",
-        total=n_generations,
-        completed=0,
-        status="0 cells",
-    )
-
-    return progress, solutions_task, featurization_task, main_task
-
-
 def make_table(title: str, columns: list[tuple[str, str]]) -> Table:
     """Create a styled table with consistent formatting.
 

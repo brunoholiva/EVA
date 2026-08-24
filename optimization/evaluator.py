@@ -44,11 +44,6 @@ class EvalResult:
     objectives: np.ndarray
     measures: np.ndarray
     p_active: np.ndarray
-    ad: np.ndarray
-    logp: np.ndarray
-    tpsa: np.ndarray
-    mw: np.ndarray
-    fsp3: np.ndarray
     n_valid: int
     gen_time: float
     timings: EvalTimings = field(default_factory=EvalTimings)
@@ -124,7 +119,6 @@ class Evaluator:
         valid_mask = _validity_mask(smiles_list)
         timings.validity = time.time() - t1
         valid_smiles = [s for s, v in zip(smiles_list, valid_mask) if v]
-        n_valid = int(valid_mask.sum())
 
         scores = self._score_valid(valid_smiles, timings)
 
@@ -222,10 +216,6 @@ class Evaluator:
         measures = np.zeros((n, n_active), dtype=np.float64)
         p_active = np.zeros(n, dtype=np.float64)
 
-        dim_arrays = {}
-        for dim_name in self._archive_cfg.active_dimension_names():
-            dim_arrays[dim_name] = np.full(n, np.nan, dtype=np.float64)
-
         kept = np.empty(0, dtype=np.int64)
         if scores is not None:
             accept = np.ones(len(scores.pa), dtype=bool)
@@ -237,7 +227,6 @@ class Evaluator:
             for k, dim_idx in enumerate(self._enabled_indices):
                 dim_name = self._archive_cfg.dimensions[dim_idx].name
                 measures[kept, k] = scores.dim_scores[dim_name][accept]
-                dim_arrays[dim_name][kept] = scores.dim_scores[dim_name][accept]
 
             # pyribs requires finite measures. Some valid molecules (e.g. those
             # containing metals like Na/Li/Mg) make certain descriptors return
@@ -256,11 +245,6 @@ class Evaluator:
             objectives=objectives,
             measures=measures,
             p_active=p_active,
-            ad=dim_arrays.get("ad", np.zeros(n, dtype=np.float64)),
-            logp=dim_arrays.get("logp", np.full(n, np.nan, dtype=np.float64)),
-            tpsa=dim_arrays.get("tpsa", np.full(n, np.nan, dtype=np.float64)),
-            mw=dim_arrays.get("mw", np.full(n, np.nan, dtype=np.float64)),
-            fsp3=dim_arrays.get("fsp3", np.full(n, np.nan, dtype=np.float64)),
             n_valid=int(valid_mask.sum()),
             gen_time=0.0,
         )
