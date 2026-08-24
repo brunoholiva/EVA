@@ -2,7 +2,7 @@
 solution_dim = 256
 learning_rate = 0.01
 threshold_min = 0.3
-objective_cap = 0.95
+objective_cap = 0.8
 
 [[archive.dimensions]]
 name = "bcut2d_logplow"
@@ -19,9 +19,11 @@ scaffold = false
 
 
 [emitter]
-sigma0 = 1.5
+sigma0 = 0.5
 batch_size = 32
 n_emitters = 16
+restart_mode = "hybrid"
+random_restart_prob = 0.4
 
 [generative]
 model_repo_id = "3BioCompBio/chembed-default"
@@ -47,22 +49,22 @@ enabled = true
 variance_threshold = 0.99
 
 [warm_start]
-enabled = false
-n_samples = 100
+enabled = true
 n_top = 16
 n_generations = 50
 threshold_min = 0.0
+representatives_path = "data/warmstart_representatives/representatives_no_aryl_acid.csv"
 
 
 [run]
-n_generations = 500
+n_generations = 1350
 eval_every = 20
 seed = 42
 resume_from = ""
 
 [output]
 output_dir = "results"
-run_name = "vsa2_bcut2_sigma"
+run_name = "warmstart_no_aryl_acid"
 
 [tensorboard]
 enabled = true

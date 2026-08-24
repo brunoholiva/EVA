@@ -65,6 +65,8 @@ class EmitterConfig:
     sigma0: float
     batch_size: int
     n_emitters: int
+    restart_mode: str = "hybrid"
+    random_restart_prob: float = 0.3
 
 
 @dataclass
@@ -115,10 +117,10 @@ class PCALatentConfig:
 @dataclass
 class WarmStartConfig:
     enabled: bool = False
-    n_samples: int = 10000
     n_top: int = 16
     n_generations: int = 50
     threshold_min: float = 0.0
+    representatives_path: str | None = None
 
 
 @dataclass

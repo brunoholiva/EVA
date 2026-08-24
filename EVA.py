@@ -6,23 +6,17 @@ import argparse
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 from config import ExperimentConfig
 from chemistry.features import MoleculeFeaturizer
 from generative import ChemBedVAE, ProjectedVAE
-from optimization import (
-    Evaluator,
-    TensorBoardLogger,
-    build_scheduler,
-    load_scheduler,
-    print_generation,
-    print_results,
-    save_archive,
-    save_scheduler,
-    visualize_archive,
-)
-from reporting.console import console, detail, make_progress_bar, section, step
+from optimization import Evaluator, TensorBoardLogger, build_scheduler
 from optimization.loop import CMAMAELoop
+from reporting.console import detail, make_progress_bar, section, step
+from reporting.persistence import load_scheduler, save_archive, save_scheduler
+from reporting.reporting import print_generation, print_results
+from reporting.visualization import visualize_archive
 from evaluation.activity import load_model as load_tabpfn
 from evaluation.activity import predict_from_features
 from evaluation.applicability import ADScorer
@@ -176,60 +170,42 @@ def _save_results(
 
 def _warm_start(
     vae: ChemBedVAE | ProjectedVAE,
-    evaluator: Evaluator,
     cfg: ExperimentConfig,
 ) -> np.ndarray | None:
-    """Sample random latent vectors and return top-K by P(active) as warm-start.
+    """Return latent vectors from predefined representatives to seed CMA-ES.
+
+    Loads representative SMILES from a CSV file (column ``"SMILES"``)
+    and encodes them through the VAE to obtain latent vectors used as
+    initial emitter means.
 
     Parameters
     ----------
     vae : ChemBedVAE or ProjectedVAE
-        The generative model.
-    evaluator : Evaluator
-        The scoring pipeline.
+        The generative model (handles PCA projection transparently).
     cfg : ExperimentConfig
         Experiment configuration.
 
     Returns
     -------
     np.ndarray or None
-        Top-K latent vectors by P(active), shape (n_top, latent_dim).
-        Returns None if warm-start is disabled or no valid molecules found.
+        Latent vectors, shape ``(n_top, latent_dim)``. Returns None if
+        warm-start is disabled.
     """
     if not cfg.warm_start.enabled:
         return None
 
     section("Warm-Start Initialization")
-    n_samples = cfg.warm_start.n_samples
-    n_top = cfg.warm_start.n_top
-    latent_dim = cfg.archive.solution_dim
 
-    step(f"Sampling {n_samples} random latent vectors")
-    rng = np.random.default_rng(cfg.run.seed)
-    z_candidates = rng.standard_normal((n_samples, latent_dim))
-
-    step("Evaluating candidates")
-    result = evaluator(z_candidates)
-
-    valid_mask = result.p_active > 0
-    n_valid = int(valid_mask.sum())
-    detail(f"Valid molecules: {n_valid}/{n_samples} ({100 * n_valid / n_samples:.1f}%)")
-
-    if n_valid == 0:
-        detail("No valid molecules found, skipping warm-start")
-        return None
-
-    valid_indices = np.where(valid_mask)[0]
-    valid_p_active = result.p_active[valid_mask]
-
-    top_k = min(n_top, n_valid)
-    top_indices = valid_indices[np.argsort(valid_p_active)[-top_k:][::-1]]
-    top_latents = z_candidates[top_indices]
-
-    detail(f"Top-{top_k} P(active): [{result.p_active[top_indices].min():.4f}, "
-           f"{result.p_active[top_indices].max():.4f}]")
-
-    return top_latents
+    rep_path = Path(cfg.warm_start.representatives_path)
+    step(f"Loading warm-start representatives from {rep_path}")
+    rep_df = pd.read_csv(rep_path)
+    smiles = rep_df["SMILES"].dropna().tolist()
+    n_top = min(cfg.warm_start.n_top, len(smiles))
+    smiles = smiles[:n_top]
+    detail(f"Encoding {n_top} representative SMILES")
+    latents = vae.encode(smiles, batch_size=16)
+    detail(f"Latents shape: {latents.shape}")
+    return latents
 
 
 def main(argv: list[str | None] | None = None) -> None:
@@ -264,10 +240,12 @@ def main(argv: list[str | None] | None = None) -> None:
         detail(f"Resuming from generation {start_gen}")
         warm_start_latents = None
     else:
-        warm_start_latents = _warm_start(vae, evaluator, cfg)
+        warm_start_latents = _warm_start(vae, cfg)
 
         scheduler = build_scheduler(
-            cfg.archive, cfg.emitter, cfg.run.seed,
+            cfg.archive,
+            cfg.emitter,
+            cfg.run.seed,
             warm_start_latents=warm_start_latents,
             warm_start_enabled=cfg.warm_start.enabled,
         )
@@ -277,8 +255,14 @@ def main(argv: list[str | None] | None = None) -> None:
         scheduler,
         evaluator,
         objective_cap=cfg.archive.objective_cap,
-        warm_start_n_generations=cfg.warm_start.n_generations if cfg.warm_start.enabled else 0,
-        warm_start_threshold_min=cfg.warm_start.threshold_min if cfg.warm_start.enabled else cfg.archive.threshold_min,
+        warm_start_n_generations=(
+            cfg.warm_start.n_generations if cfg.warm_start.enabled else 0
+        ),
+        warm_start_threshold_min=(
+            cfg.warm_start.threshold_min
+            if cfg.warm_start.enabled
+            else cfg.archive.threshold_min
+        ),
         threshold_min=cfg.archive.threshold_min,
     )
 
