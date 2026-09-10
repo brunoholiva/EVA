@@ -23,30 +23,6 @@ class ArchiveConfig:
     threshold_min: float
     objective_cap: float | None = None
 
-    def validate(self) -> None:
-        """Validate archive dimension configuration."""
-        if not self.dimensions:
-            raise ValueError("archive must have at least one dimension")
-
-        valid_names = {
-            "ad",
-            "logp",
-            "tpsa",
-            "mw",
-            "fsp3",
-            "num_rotb",
-            "num_rings",
-            "balabanj",
-            "vsa_estate2",
-            "bcut2d_logplow",
-        }
-        invalid_names = [d.name for d in self.dimensions if d.name not in valid_names]
-        if invalid_names:
-            raise ValueError(
-                "archive dimensions contain unsupported metrics: "
-                + ", ".join(invalid_names)
-            )
-
     def active_dims(self) -> list[int]:
         """Return grid resolution for all dimensions."""
         return [d.resolution for d in self.dimensions]
@@ -184,5 +160,4 @@ class ExperimentConfig:
             warm_start=WarmStartConfig(**raw.get("warm_start", {})),
             tensorboard=TensorBoardConfig(**raw.get("tensorboard", {})),
         )
-        config.archive.validate()
         return config

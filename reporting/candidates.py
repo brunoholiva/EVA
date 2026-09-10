@@ -350,8 +350,7 @@ def score_cytotox(
     import joblib
 
     from chemistry.features import MoleculeFeaturizer
-    from evaluation.activity import predict_from_features
-    from evaluation.model_utils import move_model_to_device
+    from evaluation.activity import move_model_to_device, predict_from_features
 
     result = df.copy()
     featurizer = MoleculeFeaturizer()

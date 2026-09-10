@@ -140,14 +140,24 @@ class TensorBoardLogger:
         self._writer.add_scalar("eval/n_valid", result.n_valid, step)
         self._writer.add_scalar("eval/valid_fraction", valid_fraction, step)
         self._writer.add_scalar("eval/gen_time_sec", result.gen_time, step)
-        
+
         if result.timings is not None:
             self._writer.add_scalar("timing/decode_sec", result.timings.decode, step)
-            self._writer.add_scalar("timing/validity_sec", result.timings.validity, step)
-            self._writer.add_scalar("timing/featurize_sec", result.timings.featurize_predict, step)
-            self._writer.add_scalar("timing/cpu_scorers_sec", result.timings.cpu_scorers, step)
-            self._writer.add_scalar("timing/assemble_sec", result.timings.assemble, step)
-            self._writer.add_scalar("timing/archive_ops_sec", result.timings.archive_ops, step)
+            self._writer.add_scalar(
+                "timing/validity_sec", result.timings.validity, step
+            )
+            self._writer.add_scalar(
+                "timing/featurize_sec", result.timings.featurize_predict, step
+            )
+            self._writer.add_scalar(
+                "timing/cpu_scorers_sec", result.timings.cpu_scorers, step
+            )
+            self._writer.add_scalar(
+                "timing/assemble_sec", result.timings.assemble, step
+            )
+            self._writer.add_scalar(
+                "timing/archive_ops_sec", result.timings.archive_ops, step
+            )
 
         active = result.p_active[result.p_active > 0]
         if len(active) > 0:
