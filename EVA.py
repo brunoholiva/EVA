@@ -12,6 +12,7 @@ from config import ExperimentConfig
 from chemistry.features import MoleculeFeaturizer
 from generative import ChemBedVAE, ProjectedVAE
 from optimization import Evaluator, TensorBoardLogger, build_scheduler
+from optimization.constants import INVALID_MOLECULE_OBJECTIVE
 from optimization.loop import CMAMAELoop
 from reporting.console import detail, make_progress_bar, section, step
 from reporting.persistence import load_scheduler, save_archive, save_scheduler
@@ -82,19 +83,38 @@ def _run_loop(
     vae: ChemBedVAE | ProjectedVAE,
     start_gen: int = 0,
 ) -> None:
-    """Run the CMA-MAE loop with a progress bar and periodic saves."""
+    """Run the CMA-MAE loop with a progress bar and periodic saves.
+
+    Collects every evaluated molecule into ``all_evaluations.csv`` with
+    columns ``eval, smiles, p_active, valid, gen`` so that the run can
+    be compared against naive and GA baselines on the same plots.
+    """
     eval_every = cfg.run.eval_every
     n_gen = cfg.run.n_generations
 
-    # Simple progress bar for generations only
     progress, task_id = make_progress_bar("CMA-MAE", n_gen)
+
+    all_evals: list[tuple[int, str, float, bool, int]] = []
+    eval_counter = [start_gen * cfg.emitter.batch_size * cfg.emitter.n_emitters]
+
+    if start_gen > 0:
+        existing_csv = output_dir / "all_evaluations.csv"
+        if existing_csv.exists():
+            existing = pd.read_csv(existing_csv)
+            all_evals = [
+                (int(r.eval), r.smiles, float(r.p_active), bool(r.valid), int(r.gen))
+                for r in existing.itertuples(index=False)
+            ]
+            eval_counter = [int(existing["eval"].max())]
+            detail(
+                f"Loaded {len(all_evals):,} existing evaluations from {existing_csv}"
+            )
 
     with progress:
 
         def _on_step(gen, result, archive):
-            """Update progress bar every generation."""
+            """Update progress bar, log to TensorBoard, collect evaluations."""
             progress.update(task_id, completed=gen + 1)
-            # Log to TensorBoard
             tb_logger.log_generation(
                 step=gen,
                 result=result,
@@ -106,6 +126,22 @@ def _run_loop(
                 real_objectives=loop.real_objectives,
                 objective_cap=cfg.archive.objective_cap,
             )
+            for i in range(len(result.smiles)):
+                eval_num = eval_counter[0] + i + 1
+                valid = result.objectives[i] != INVALID_MOLECULE_OBJECTIVE
+                if valid:
+                    all_evals.append(
+                        (
+                            eval_num,
+                            result.smiles[i],
+                            float(result.p_active[i]),
+                            True,
+                            gen,
+                        )
+                    )
+                else:
+                    all_evals.append((eval_num, "", float("nan"), False, gen))
+            eval_counter[0] += len(result.smiles)
 
         def _on_progress(gen, result, archive):
             """Print generation table and save state at intervals."""
@@ -118,6 +154,7 @@ def _run_loop(
                         f"feat={t.featurize_predict:.1f}s cpu={t.cpu_scorers:.1f}s"
                     )
                 save_scheduler(loop.scheduler, output_dir)
+                _save_all_evals(all_evals, output_dir)
                 if gen == 0:
                     save_archive(
                         loop.archive,
@@ -135,6 +172,18 @@ def _run_loop(
             on_step=_on_step,
             start_gen=start_gen,
         )
+
+    _save_all_evals(all_evals, output_dir)
+    detail(f"Saved {len(all_evals):,} evaluations to all_evaluations.csv")
+
+
+def _save_all_evals(
+    evals: list[tuple[int, str, float, bool, int]],
+    output_dir: Path,
+) -> None:
+    """Save collected evaluations to all_evaluations.csv."""
+    df = pd.DataFrame(evals, columns=["eval", "smiles", "p_active", "valid", "gen"])
+    df.to_csv(output_dir / "all_evaluations.csv", index=False)
 
 
 def _save_results(
