@@ -22,6 +22,7 @@ from reporting.persistence import (
 from reporting.reporting import print_generation, print_results
 from reporting.visualization import visualize_archive
 
+# Candidate pipeline and HTML report are imported lazily (heavy deps).
 __all__ = [
     "console",
     "detail",
@@ -40,3 +41,20 @@ __all__ = [
     "step",
     "visualize_archive",
 ]
+
+
+# Lazy re-exports for candidates.html_report (avoids import-time overhead)
+def __getattr__(name: str):
+    if name == "run_pipeline":
+        from reporting.candidates import run_pipeline
+
+        return run_pipeline
+    if name == "run_full_report":
+        from reporting.candidates import run_full_report
+
+        return run_full_report
+    if name == "generate_html_report":
+        from reporting.html_report import generate_html_report
+
+        return generate_html_report
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
