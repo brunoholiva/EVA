@@ -10,7 +10,6 @@ import pandas as pd
 from rdkit import Chem, DataStructs
 from rdkit.Chem.Scaffolds import MurckoScaffold
 from rdkit.Chem.rdFingerprintGenerator import GetMorganGenerator
-from rdkit.ML.Cluster import Butina
 
 
 def _compute_scaffold(smi: str) -> str | None:
@@ -86,25 +85,15 @@ def compute_dhq(
     int
         Number of distinct chemotype clusters.
     """
+    from reporting.multi_rep_archive import cluster_smiles
+
     mask = scores > score_threshold
     selected_smiles = [s for s, m in zip(smiles, mask) if m]
     if not selected_smiles:
         return 0
 
-    fps = _compute_morgan_fps(selected_smiles, radius=radius, n_bits=n_bits)
-    dists = []
-    for i in range(1, len(fps)):
-        for j in range(i):
-            if fps[i] is not None and fps[j] is not None:
-                dists.append(1.0 - DataStructs.TanimotoSimilarity(fps[i], fps[j]))
-            else:
-                dists.append(1.0)
-
-    clusters = Butina.ClusterData(
-        dists,
-        nPts=len(fps),
-        distThresh=butina_threshold,
-        isDistData=True,
+    clusters = cluster_smiles(
+        selected_smiles, threshold=butina_threshold, radius=radius, n_bits=n_bits
     )
     return len(clusters)
 
@@ -141,7 +130,6 @@ def compute_metrics(
 
     high_mask = scores > score_threshold
     high_smiles = [s for s, m in zip(smiles, high_mask) if m]
-    high_scores = scores[high_mask]
 
     dhq = compute_dhq(
         smiles,
@@ -175,7 +163,11 @@ def compute_metrics(
         "n_total": len(df),
         "n_gt_threshold": int(high_mask.sum()),
         "max_p_active": float(scores.max()),
-        "mean_p_active_top100": float(np.sort(scores)[-100:].mean()) if len(scores) >= 100 else float(scores.mean()),
+        "mean_p_active_top100": (
+            float(np.sort(scores)[-100:].mean())
+            if len(scores) >= 100
+            else float(scores.mean())
+        ),
         "dhq": dhq,
         "unique_scaffolds_gt_threshold": unique_scaffolds,
         "largest_scaffold_fraction": largest_scaffold_fraction,

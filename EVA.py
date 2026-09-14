@@ -17,7 +17,7 @@ from optimization.loop import CMAMAELoop
 from reporting.console import detail, make_progress_bar, section, step
 from reporting.persistence import load_scheduler, save_archive, save_scheduler
 from reporting.reporting import print_generation, print_results
-from reporting.visualization import visualize_archive
+from reporting.plotting import visualize_archive
 from evaluation.activity import load_model as load_tabpfn
 from evaluation.activity import predict_from_features
 from evaluation.applicability import ADScorer

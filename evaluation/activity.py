@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from joblib import load
 
+
 def move_model_to_device(model: TabPFNClassifier, device: str) -> TabPFNClassifier:
     """Transfer model parameters and KV-caches to *device*."""
     model.to(device)
@@ -18,6 +19,7 @@ def move_model_to_device(model: TabPFNClassifier, device: str) -> TabPFNClassifi
             cache.to(device) for cache in model.executor_.kv_caches
         ]
     return model
+
 
 if TYPE_CHECKING:
     from tabpfn import TabPFNClassifier

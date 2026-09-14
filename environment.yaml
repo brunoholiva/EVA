@@ -4,9 +4,8 @@ channels:
   - conda-forge
 
 dependencies:
-  - python>=3.12
+  - python==3.12
   - pip
-  - setuptools<82          # CRITICAL: must be <82 before BRSAScore install
   - rdkit
   - numpy
   - scipy
@@ -19,8 +18,10 @@ dependencies:
       - lightning
       - descriptastorus
       - selfies
-
+      - setuptools<82
+      - aizynthfinder
       - ribs[all]
+      - tensorboard
 
       - matplotlib
       - seaborn

@@ -12,7 +12,6 @@ from rich.progress import (
     TextColumn,
     TimeRemainingColumn,
 )
-from sklearn.base import BaseEstimator, TransformerMixin
 
 from chemistry.fingerprint import compute_morgan
 from reporting.console import console
@@ -82,7 +81,7 @@ def _compute_features_batch(
     return out
 
 
-class MoleculeFeaturizer(BaseEstimator, TransformerMixin):
+class MoleculeFeaturizer:
     """Convert SMILES to a concatenated feature matrix.
 
     The matrix is built by concatenating a **Morgan fingerprint** (512-bit,
@@ -109,14 +108,9 @@ class MoleculeFeaturizer(BaseEstimator, TransformerMixin):
     def n_features(self) -> int:
         return self.n_bits + N_RDKIT_DESCRIPTORS + N_MACCS
 
-    def fit(self, X: list[str], y: np.ndarray | None = None):
-        """No-op; included for scikit-learn pipeline compatibility."""
-        return self
-
     def transform(
         self,
         X: list[str],
-        y: np.ndarray | None = None,
         progress: Progress | None = None,
         task_id: int | None = None,
     ) -> np.ndarray:

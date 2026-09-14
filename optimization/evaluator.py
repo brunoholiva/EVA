@@ -32,7 +32,6 @@ class EvalTimings:
     featurize_predict: float = 0.0
     cpu_scorers: float = 0.0
     assemble: float = 0.0
-    total: float = 0.0
     archive_ops: float = 0.0
 
 
@@ -86,9 +85,7 @@ class Evaluator:
         self._activity_model = activity_model
         self._featurizer = featurizer
         self._archive_cfg = archive_cfg
-        self._enabled_indices = list(range(len(archive_cfg.dimensions)))
-        enabled_names = archive_cfg.active_dimension_names()
-        self._ad_enabled = "ad" in enabled_names
+        self._n_measures = len(archive_cfg.dimensions)
         self._seen_smiles: set[str] = set()
 
     @property
@@ -187,7 +184,7 @@ class Evaluator:
         dict of str to np.ndarray
             Dictionary mapping dimension names to computed values.
         """
-        from evaluation.dimensions import create_dimension
+        from evaluation.dimensions import compute_dimension
         from evaluation.molecules import ParsedMolecules
 
         parsed = ParsedMolecules(valid_smiles)
@@ -206,11 +203,7 @@ class Evaluator:
             else:
                 compute_parsed = parsed
 
-            if dim_name == "ad":
-                dimension = create_dimension(dim_name, ad_scorer=self._ad)
-            else:
-                dimension = create_dimension(dim_name)
-            dim_scores[dim_name] = dimension.compute(compute_parsed)
+            dim_scores[dim_name] = compute_dimension(dim_name, compute_parsed, self._ad)
 
         return dim_scores
 
@@ -230,8 +223,7 @@ class Evaluator:
         behaviour of chemically invalid molecules.
         """
         objectives = np.full(n, INVALID_MOLECULE_OBJECTIVE, dtype=np.float64)
-        n_active = len(self._enabled_indices)
-        measures = np.zeros((n, n_active), dtype=np.float64)
+        measures = np.zeros((n, self._n_measures), dtype=np.float64)
         p_active = np.zeros(n, dtype=np.float64)
 
         scored_positions = np.flatnonzero(new_mask)
@@ -239,8 +231,7 @@ class Evaluator:
             objectives[scored_positions] = scores.pa
             p_active[scored_positions] = scores.pa
 
-            for k, dim_idx in enumerate(self._enabled_indices):
-                dim_name = self._archive_cfg.dimensions[dim_idx].name
+            for k, dim_name in enumerate(self._archive_cfg.active_dimension_names()):
                 measures[scored_positions, k] = scores.dim_scores[dim_name]
 
             # pyribs requires finite measures. Some valid molecules (e.g. those

@@ -59,7 +59,6 @@ class ADConfig:
     n_neighbors: int
     n_bits: int
     radius: int
-    max_cache_size: int = 5000
 
 
 @dataclass
@@ -87,7 +86,6 @@ class OutputConfig:
 class PCALatentConfig:
     path: str = "data/pca_latent.joblib"
     enabled: bool = True
-    variance_threshold: float = 0.99
 
 
 @dataclass

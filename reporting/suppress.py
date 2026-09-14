@@ -9,7 +9,7 @@ from rdkit.rdBase import DisableLog
 
 def suppress_joblib_warnings() -> None:
     """Suppress joblib loky worker timeout warnings.
-    
+
     Call this at module import time to silence joblib warnings about
     workers stopping while jobs are still running.
     """
@@ -23,7 +23,7 @@ def suppress_joblib_warnings() -> None:
 
 def suppress_rdkit_logs() -> None:
     """Suppress all RDKit logging output.
-    
+
     Call this at module import time to silence RDKit warnings and errors.
     """
     DisableLog("rdApp.*")

@@ -1,79 +1,70 @@
-"""Dimension registry for plug-and-play archive dimensions."""
+"""Data-driven archive dimensions.
+
+Each non-AD dimension is an RDKit descriptor function applied to each
+parsed molecule. ``resolution``/``range`` live in ``config.toml``; the
+registry here only maps names to compute functions.
+"""
 
 from __future__ import annotations
 
-from evaluation.dimensions.ad import ADDimension
-from evaluation.dimensions.base import Dimension
-from evaluation.dimensions.fsp3 import Fsp3Dimension
-from evaluation.dimensions.logp import LogPDimension
-from evaluation.dimensions.mw import Mordimension
-from evaluation.dimensions.num_rotb import NumRotBDimension
-from evaluation.dimensions.tpsa import TPSADimension
-from evaluation.dimensions.num_rings import NumRingDimension
-from evaluation.dimensions.balabanj import BalabanJDimension
-from evaluation.dimensions.vsa_estate2 import VSAEState2Dimension
-from evaluation.dimensions.bcut2d_logplow import BCUT2D_LOGPLOWDimension
+import numpy as np
+from rdkit.Chem import Descriptors, GraphDescriptors
+
+from evaluation.applicability import ADScorer
+from evaluation.molecules import ParsedMolecules
 
 
-__all__ = [
-    "Dimension",
-    "ADDimension",
-    "LogPDimension",
-    "TPSADimension",
-    "Mordimension",
-    "Fsp3Dimension",
-    "NumRotBDimension",
-    "NumRingDimension",
-    "BalabanJDimension",
-    "BCUT2D_LOGPLOWDimension",
-    "VSAEState2Dimension",
-    "DIMENSION_REGISTRY",
-]
+def _descriptor_values(parsed: ParsedMolecules, fn) -> np.ndarray:
+    """Apply an RDKit descriptor function to every parsed molecule."""
+    return np.array(
+        [fn(mol) if mol is not None else float("nan") for mol in parsed.mols]
+    )
 
-# Registry of dimension classes (without dependencies)
-DIMENSION_REGISTRY = {
-    "logp": LogPDimension(),
-    "tpsa": TPSADimension(),
-    "mw": Mordimension(),
-    "fsp3": Fsp3Dimension(),
-    "num_rotb": NumRotBDimension(),
-    "num_rings": NumRingDimension(),
-    "balabanj": BalabanJDimension(),
-    "vsa_estate2": VSAEState2Dimension(),
-    "bcut2d_logplow": BCUT2D_LOGPLOWDimension(),
+
+_DESCRIPTORS = {
+    "logp": Descriptors.MolLogP,
+    "tpsa": Descriptors.TPSA,
+    "mw": Descriptors.MolWt,
+    "fsp3": Descriptors.FractionCSP3,
+    "num_rotb": Descriptors.NumRotatableBonds,
+    "num_rings": Descriptors.RingCount,
+    "balabanj": GraphDescriptors.BalabanJ,
+    "vsa_estate2": Descriptors.VSA_EState2,
+    "bcut2d_logplow": Descriptors.BCUT2D_LOGPLOW,
 }
 
 
-def create_dimension(name: str, **kwargs) -> Dimension:
-    """Create a dimension instance by name.
-    
+def compute_dimension(
+    name: str,
+    parsed: ParsedMolecules,
+    ad_scorer: ADScorer | None = None,
+) -> np.ndarray:
+    """Compute a dimension's values for parsed molecules.
+
     Parameters
     ----------
     name : str
-        Dimension name (e.g., "logp", "ad").
-    **kwargs
-        Additional arguments for dimension initialization (e.g., ad_scorer).
-    
+        Dimension name (e.g. ``"logp"``, ``"ad"``).
+    parsed : ParsedMolecules
+        Parsed molecules with shared Mol objects and lazy fingerprints.
+    ad_scorer : ADScorer or None
+        Required for the ``"ad"`` dimension.
+
     Returns
     -------
-    Dimension
-        Dimension instance.
-    
-    Raises
-    ------
-    ValueError
-        If dimension name is not registered or required arguments are missing.
+    np.ndarray of shape ``(len(parsed.smiles),)``
+        Dimension values. Invalid molecules receive NaN (or 1.0 for AD).
     """
     if name == "ad":
-        if "ad_scorer" not in kwargs:
-            raise ValueError(
-                "AD dimension requires 'ad_scorer' argument. "
-                "Example: create_dimension('ad', ad_scorer=scorer)"
-            )
-        return ADDimension(**kwargs)
-    if name not in DIMENSION_REGISTRY:
+        if ad_scorer is None:
+            raise ValueError("AD dimension requires an 'ad_scorer' argument")
+        fps, valid_mask = parsed.fingerprints
+        ad = np.ones(len(parsed.smiles), dtype=np.float32)
+        if fps is not None and len(fps) > 0:
+            ad[valid_mask] = ad_scorer.compute_from_fps(fps)
+        return ad
+    if name not in _DESCRIPTORS:
         raise ValueError(
-            f"Unknown dimension '{name}'. "
-            f"Available: {list(DIMENSION_REGISTRY.keys()) + ['ad']}"
+            f"Unknown dimension '{name}'. Available: {sorted(_DESCRIPTORS) + ['ad']}"
         )
-    return DIMENSION_REGISTRY[name]
+    return _descriptor_values(parsed, _DESCRIPTORS[name])

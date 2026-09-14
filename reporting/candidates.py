@@ -7,12 +7,14 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from rdkit import Chem, RDLogger
-from rdkit.Chem import rdFingerprintGenerator
+from rdkit import Chem
 
+from chemistry.fingerprint import compute_morgan
+from chemistry.smiles import canonicalize_smiles
 from reporting.console import section, step
+from reporting.suppress import suppress_rdkit_logs
 
-RDLogger.DisableLog("rdApp.*")
+suppress_rdkit_logs()
 
 _RADIUS = 2
 _N_BITS = 2048
@@ -51,18 +53,6 @@ def smiles_to_svg(smiles: str, width: int = 200, height: int = 160) -> str | Non
     return drawer.GetDrawingText()
 
 
-def _canonicalize(smiles: str) -> str:
-    """Canonicalize a single SMILES string. Returns '' on failure."""
-    mol = Chem.MolFromSmiles(smiles)
-    if mol is None:
-        return ""
-    return Chem.MolToSmiles(mol)
-
-
-def _get_morgan_gen() -> rdFingerprintGenerator.MorganGenerator:
-    return rdFingerprintGenerator.GetMorganGenerator(radius=_RADIUS, fpSize=_N_BITS)
-
-
 # ---------------------------------------------------------------------------
 # Pipeline steps
 # ---------------------------------------------------------------------------
@@ -85,8 +75,8 @@ def dedup_evaluations(df: pd.DataFrame) -> pd.DataFrame:
     """
     step("Deduplicating evaluations")
     valid = df[df["valid"] == True].copy()  # noqa: E712
-    valid["canonical"] = valid["smiles"].map(_canonicalize)
-    valid = valid[valid["canonical"] != ""]
+    valid["canonical"] = valid["smiles"].map(canonicalize_smiles)
+    valid = valid[valid["canonical"].notna()]
 
     grouped = valid.groupby("canonical", sort=False).agg(
         p_active=("p_active", "max"),
@@ -138,7 +128,7 @@ def load_training_actives(path: str | Path) -> set[str]:
     """
     df = pd.read_csv(path)
     actives = df[df["target"] == 1]["SMILES"]
-    return {_canonicalize(s) for s in actives if _canonicalize(s)}
+    return {c for s in actives if (c := canonicalize_smiles(s))}
 
 
 def remove_training_actives(
@@ -204,15 +194,14 @@ def compute_max_tanimoto_to_training(
         ``similar_training_smiles`` columns.
     """
     step("Computing max Tanimoto to training actives")
-    gen = _get_morgan_gen()
 
     if training_fps is None:
-        training_fps = _compute_morgan_matrix(training_smiles, gen)
+        training_fps = _compute_morgan_matrix(training_smiles)
     if training_sums is None:
         training_sums = training_fps.sum(axis=1)
 
     cand_smiles = candidates[smiles_col].tolist()
-    cand_fps = _compute_morgan_matrix(cand_smiles, gen)
+    cand_fps = _compute_morgan_matrix(cand_smiles)
     cand_sums = cand_fps.sum(axis=1)
 
     n_cand = len(cand_smiles)
@@ -240,22 +229,16 @@ def compute_max_tanimoto_to_training(
     return result
 
 
-def _compute_morgan_matrix(
-    smiles: list[str], gen: rdFingerprintGenerator.MorganGenerator
-) -> np.ndarray:
+def _compute_morgan_matrix(smiles: list[str]) -> np.ndarray:
     """Compute Morgan fingerprint matrix (float32) from SMILES."""
-    fps = []
+    rows = []
     for smi in smiles:
         mol = Chem.MolFromSmiles(smi)
         if mol is not None:
-            fp = gen.GetFingerprint(mol)
-            arr = np.zeros(_N_BITS, dtype=np.float32)
-            for bit in fp.GetOnBits():
-                arr[bit] = 1.0
-            fps.append(arr)
+            rows.append(compute_morgan(mol, radius=_RADIUS, fp_size=_N_BITS))
         else:
-            fps.append(np.zeros(_N_BITS, dtype=np.float32))
-    return np.array(fps, dtype=np.float32)
+            rows.append(np.zeros(_N_BITS, dtype=np.float32))
+    return np.array(rows, dtype=np.float32)
 
 
 # ---------------------------------------------------------------------------

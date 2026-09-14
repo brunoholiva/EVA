@@ -5,11 +5,11 @@ from __future__ import annotations
 import numpy as np
 from rdkit import Chem
 from rdkit.Chem.Scaffolds import MurckoScaffold
-from rdkit.rdBase import DisableLog
 
 from chemistry.fingerprint import mols_to_morgan
+from reporting.suppress import suppress_rdkit_logs
 
-DisableLog("rdApp.*")
+suppress_rdkit_logs()
 
 
 class ParsedMolecules:

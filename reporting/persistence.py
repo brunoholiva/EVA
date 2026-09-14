@@ -58,24 +58,6 @@ def save_archive(
     return output_dir
 
 
-def load_archive(path: str | Path) -> GridArchive:
-    """Load a GridArchive from a joblib file.
-
-    Parameters
-    ----------
-    path : str or Path
-        Path to ``archive.joblib``.
-
-    Returns
-    -------
-    GridArchive
-        The restored archive.
-    """
-    archive: GridArchive = joblib.load(path)
-    loaded("archive", path, f"{len(archive)} cells")
-    return archive
-
-
 def _export_archive_csv(
     archive: GridArchive,
     decode_fn,
@@ -104,7 +86,9 @@ def _export_archive_csv(
     # Add real P(active) if available
     if real_objectives is not None:
         cell_indices = arch_data["index"][order]
-        data["p_active_real"] = [real_objectives.get(idx, np.nan) for idx in cell_indices]
+        data["p_active_real"] = [
+            real_objectives.get(idx, np.nan) for idx in cell_indices
+        ]
     else:
         data["p_active_real"] = [np.nan] * len(order)
 

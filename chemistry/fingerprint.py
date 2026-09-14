@@ -130,16 +130,16 @@ def mols_to_morgan(
     """
     fps_list: list[np.ndarray] = []
     valid_indices: list[int] = []
-    
+
     for i, mol in enumerate(mols):
         if mol is not None:
             fp = compute_morgan(mol, radius=radius, fp_size=fp_size)
             fps_list.append(fp)
             valid_indices.append(i)
-    
+
     valid_mask = np.zeros(len(mols), dtype=bool)
     valid_mask[valid_indices] = True
-    
+
     if fps_list:
         return np.vstack(fps_list), valid_mask
     return None, valid_mask

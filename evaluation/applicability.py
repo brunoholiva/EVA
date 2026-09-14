@@ -8,9 +8,9 @@ import joblib
 import numpy as np
 
 from chemistry.tanimoto import batch_tanimoto_topk
-from rdkit import RDLogger
+from reporting.suppress import suppress_rdkit_logs
 
-RDLogger.DisableLog("rdApp.*")
+suppress_rdkit_logs()
 
 N_NEIGHBORS_DEFAULT: int = 5
 

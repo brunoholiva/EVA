@@ -1,20 +1,20 @@
 [archive]
 solution_dim = 256
 learning_rate = 0.01
-threshold_min = 0.3
-objective_cap = 0.8
+threshold_min = 0.01
+objective_cap = 1.0
 
 [[archive.dimensions]]
-name = "bcut2d_logplow"
+name = "ad"
 resolution = 15
-range = [-3.2, -1.7]
+range = [0.0, 0.9]
 scaffold = false
 
 
 [[archive.dimensions]]
-name = "vsa_estate2"
-resolution = 15
-range = [-1.0, 60.0]
+name = "tpsa"
+resolution = 25
+range = [0.0, 200.0]
 scaffold = false
 
 
@@ -23,7 +23,7 @@ sigma0 = 0.5
 batch_size = 32
 n_emitters = 16
 restart_mode = "hybrid"
-random_restart_prob = 0.4
+random_restart_prob = 0.7
 
 [generative]
 model_repo_id = "3BioCompBio/chembed-default"
@@ -32,11 +32,10 @@ latent_dim = 256
 seed = 42
 
 [ad]
-ad_model_path = "data/predictor/ad_model.joblib"
+ad_model_path = "data/predictor/ad_model_actives.joblib"
 n_neighbors = 5
 n_bits = 2048
 radius = 2
-max_cache_size = 5000
 
 [activity]
 model_path = "data/predictor/tabpfn_model.joblib"
@@ -46,25 +45,24 @@ softmax_temperature = 2.0
 [pca]
 path = "data/pca_latent.joblib"
 enabled = true
-variance_threshold = 0.99
 
 [warm_start]
 enabled = true
 n_top = 16
-n_generations = 50
+n_generations = 1
 threshold_min = 0.0
-representatives_path = "data/warmstart_representatives/representatives_no_aryl_acid.csv"
+representatives_path = "data/warmstart_representatives/representatives_all.csv"
 
 
 [run]
-n_generations = 1350
+n_generations = 1000
 eval_every = 20
 seed = 42
 resume_from = ""
 
 [output]
 output_dir = "results"
-run_name = "warmstart_no_aryl_acid"
+run_name = "no_repeats_novel"
 
 [tensorboard]
 enabled = true

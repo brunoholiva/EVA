@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from rdkit import Chem, RDLogger
+from rdkit import Chem
 
-RDLogger.DisableLog("rdApp.*")
+from reporting.suppress import suppress_rdkit_logs
+
+suppress_rdkit_logs()
 
 
 def canonicalize_smiles(smiles: str) -> str | None:

@@ -8,30 +8,11 @@ from pathlib import Path
 
 import numpy as np
 from ribs.archives import GridArchive
+from torch.utils.tensorboard import SummaryWriter
 
 from config import ExperimentConfig, TensorBoardConfig
 from optimization.evaluator import EvalResult
 from reporting.plotting import create_archive_figure
-
-
-def _load_summary_writer_class():
-    """Load a TensorBoard SummaryWriter implementation."""
-    try:
-        from torch.utils.tensorboard import SummaryWriter
-
-        return SummaryWriter
-    except ImportError:
-        pass
-
-    try:
-        from tensorboardX import SummaryWriter
-
-        return SummaryWriter
-    except ImportError as exc:
-        raise ImportError(
-            "TensorBoard logging is enabled, but no SummaryWriter is available. "
-            "Install tensorboard or tensorboardX in the eva environment."
-        ) from exc
 
 
 class TensorBoardLogger:
@@ -44,7 +25,6 @@ class TensorBoardLogger:
         if not cfg.enabled:
             return
 
-        SummaryWriter = _load_summary_writer_class()
         log_dir = Path(cfg.log_dir)
         if not log_dir.is_absolute():
             log_dir = Path(output_dir) / log_dir
