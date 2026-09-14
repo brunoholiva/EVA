@@ -47,6 +47,7 @@ class EvalResult:
     n_valid: int
     gen_time: float
     timings: EvalTimings = field(default_factory=EvalTimings)
+    n_duplicates: int = 0
 
 
 class Evaluator:
@@ -88,6 +89,7 @@ class Evaluator:
         self._enabled_indices = list(range(len(archive_cfg.dimensions)))
         enabled_names = archive_cfg.active_dimension_names()
         self._ad_enabled = "ad" in enabled_names
+        self._seen_smiles: set[str] = set()
 
     @property
     def decode_fn(self):
@@ -96,6 +98,11 @@ class Evaluator:
 
     def __call__(self, z: np.ndarray) -> EvalResult:
         """Score a batch of latent vectors.
+
+        Duplicate molecules (same canonical SMILES seen before) are
+        skipped — they receive ``INVALID_MOLECULE_OBJECTIVE`` and zero
+        measures, avoiding redundant featurization, prediction, and
+        dimension scoring.
 
         Parameters
         ----------
@@ -116,14 +123,18 @@ class Evaluator:
         timings.decode = time.time() - t1
 
         t1 = time.time()
-        valid_mask = _validity_mask(smiles_list)
+        valid_mask, canonical = _validity_and_canonical(smiles_list)
         timings.validity = time.time() - t1
-        valid_smiles = [s for s, v in zip(smiles_list, valid_mask) if v]
+
+        new_mask = _dedup_mask(canonical, valid_mask, self._seen_smiles)
+
+        scored_positions = np.flatnonzero(new_mask)
+        valid_smiles = [smiles_list[i] for i in scored_positions]
 
         scores = self._score_valid(valid_smiles, timings)
 
         t1 = time.time()
-        result = self._assemble(n, valid_mask, smiles_list, scores)
+        result = self._assemble(n, valid_mask, new_mask, smiles_list, scores)
         timings.assemble = time.time() - t1
 
         result.gen_time = time.time() - t0
@@ -207,38 +218,44 @@ class Evaluator:
         self,
         n: int,
         valid_mask: np.ndarray,
+        new_mask: np.ndarray,
         smiles_list: list[str],
         scores: _ScoreBundle | None,
     ) -> EvalResult:
-        """Map per-molecule scores back to the full candidate array."""
+        """Map per-molecule scores back to the full candidate array.
+
+        Molecules are placed at positions indicated by *new_mask*.
+        Valid-but-duplicate molecules (``valid_mask & ~new_mask``) receive
+        ``INVALID_MOLECULE_OBJECTIVE`` and zero measures, matching the
+        behaviour of chemically invalid molecules.
+        """
         objectives = np.full(n, INVALID_MOLECULE_OBJECTIVE, dtype=np.float64)
         n_active = len(self._enabled_indices)
         measures = np.zeros((n, n_active), dtype=np.float64)
         p_active = np.zeros(n, dtype=np.float64)
 
-        kept = np.empty(0, dtype=np.int64)
-        if scores is not None:
-            accept = np.ones(len(scores.pa), dtype=bool)
-            kept = np.flatnonzero(valid_mask)[accept]
-
-            objectives[kept] = scores.pa[accept]
-            p_active[kept] = scores.pa[accept]
+        scored_positions = np.flatnonzero(new_mask)
+        if scores is not None and len(scored_positions) > 0:
+            objectives[scored_positions] = scores.pa
+            p_active[scored_positions] = scores.pa
 
             for k, dim_idx in enumerate(self._enabled_indices):
                 dim_name = self._archive_cfg.dimensions[dim_idx].name
-                measures[kept, k] = scores.dim_scores[dim_name][accept]
+                measures[scored_positions, k] = scores.dim_scores[dim_name]
 
             # pyribs requires finite measures. Some valid molecules (e.g. those
             # containing metals like Na/Li/Mg) make certain descriptors return
             # NaN (BCUT2D_* raise on Gasteiger charge failure). Treat them like
             # invalid molecules: rejected by the objective, finite sentinel so
             # the whole-batch validation in GridArchive.add() passes.
-            non_finite = ~np.isfinite(measures[kept]).all(axis=1)
+            non_finite = ~np.isfinite(measures[scored_positions]).all(axis=1)
             if non_finite.any():
-                bad_idx = kept[non_finite]
+                bad_idx = scored_positions[non_finite]
                 objectives[bad_idx] = INVALID_MOLECULE_OBJECTIVE
                 p_active[bad_idx] = 0.0
                 measures[bad_idx] = 0.0
+
+        n_duplicates = int((valid_mask & ~new_mask).sum())
 
         return EvalResult(
             smiles=smiles_list,
@@ -247,6 +264,7 @@ class Evaluator:
             p_active=p_active,
             n_valid=int(valid_mask.sum()),
             gen_time=0.0,
+            n_duplicates=n_duplicates,
         )
 
 
@@ -258,30 +276,61 @@ class _ScoreBundle:
     pa: np.ndarray
 
 
-def _check_valid(smi: str) -> bool:
-    """Check if a single SMILES string is chemically valid.
+def _parse_and_canonical(smi: str) -> tuple[bool, str | None]:
+    """Parse a SMILES string and return ``(valid, canonical)``.
 
-    Rejects empty strings, molecules that fail RDKit parsing, and
-    molecules whose SELFIES token count exceeds *MAX_SELFIES_TOKENS*
-    (catches pathological repeating chains from extreme latent vectors).
+    Returns ``(False, None)`` for empty strings, failed RDKit parsing,
+    or SELFIES token counts exceeding *MAX_SELFIES_TOKENS*.
     """
     if not smi:
-        return False
-    if Chem.MolFromSmiles(smi) is None:
-        return False
+        return False, None
+    mol = Chem.MolFromSmiles(smi)
+    if mol is None:
+        return False, None
     try:
         selfies = sf.encoder(smi)
         tokens = list(sf.split_selfies(selfies))
         if len(tokens) > MAX_SELFIES_TOKENS:
-            return False
+            return False, None
     except Exception:
-        return False
-    return True
+        return False, None
+    canonical = Chem.MolToSmiles(mol)
+    return True, canonical
 
 
-def _validity_mask(smiles: list[str], n_jobs: int = -1) -> np.ndarray:
-    """Return a boolean mask of chemically valid SMILES strings."""
+def _validity_and_canonical(
+    smiles: list[str], n_jobs: int = -1
+) -> tuple[np.ndarray, list[str | None]]:
+    """Return ``(valid_mask, canonical)`` for a batch of SMILES strings.
+
+    The validity check (including canonicalization) runs in parallel.
+    Deduplication is *not* done here — it is handled by the caller via
+    the ``seen`` set.
+    """
     results = Parallel(n_jobs=n_jobs, prefer="processes")(
-        delayed(_check_valid)(s) for s in smiles
+        delayed(_parse_and_canonical)(s) for s in smiles
     )
-    return np.array(results, dtype=bool)
+    valid = np.array([r[0] for r in results], dtype=bool)
+    canonical = [r[1] for r in results]
+    return valid, canonical
+
+
+def _dedup_mask(
+    canonical: list[str | None],
+    valid_mask: np.ndarray,
+    seen: set[str],
+) -> np.ndarray:
+    """Return a boolean mask of first-seen valid canonical SMILES.
+
+    Invalid molecules (``canonical[i] is None``) always return False.
+    First occurrences of a valid canonical SMILES are True and added
+    to *seen*; later occurrences return False.
+    """
+    n = len(canonical)
+    mask = np.zeros(n, dtype=bool)
+    for i in range(n):
+        if valid_mask[i] and canonical[i] is not None:
+            if canonical[i] not in seen:
+                mask[i] = True
+                seen.add(canonical[i])
+    return mask

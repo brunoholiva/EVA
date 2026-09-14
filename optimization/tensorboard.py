@@ -139,6 +139,7 @@ class TensorBoardLogger:
 
         self._writer.add_scalar("eval/n_valid", result.n_valid, step)
         self._writer.add_scalar("eval/valid_fraction", valid_fraction, step)
+        self._writer.add_scalar("eval/n_duplicates", result.n_duplicates, step)
         self._writer.add_scalar("eval/gen_time_sec", result.gen_time, step)
 
         if result.timings is not None:
