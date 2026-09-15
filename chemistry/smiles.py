@@ -25,7 +25,10 @@ def canonicalize_smiles(smiles: str) -> str | None:
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return None
-    return Chem.MolToSmiles(mol)
+    try:
+        return Chem.MolToSmiles(mol)
+    except Exception:
+        return None
 
 
 def canonicalize_batch(smiles_list: list[str]) -> list[str]:

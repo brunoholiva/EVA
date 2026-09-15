@@ -271,7 +271,9 @@ def _parse_and_canonical(smi: str) -> tuple[bool, str | None]:
     """Parse a SMILES string and return ``(valid, canonical)``.
 
     Returns ``(False, None)`` for empty strings, failed RDKit parsing,
-    or SELFIES token counts exceeding *MAX_SELFIES_TOKENS*.
+    SELFIES token counts exceeding *MAX_SELFIES_TOKENS*, or SMILES that
+    RDKit parses but fails to canonicalize (``MolToSmiles`` invariant
+    violations on degenerate molecules).
     """
     if not smi:
         return False, None
@@ -285,7 +287,10 @@ def _parse_and_canonical(smi: str) -> tuple[bool, str | None]:
             return False, None
     except Exception:
         return False, None
-    canonical = Chem.MolToSmiles(mol)
+    try:
+        canonical = Chem.MolToSmiles(mol)
+    except Exception:
+        return False, None
     return True, canonical
 
 
