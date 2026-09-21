@@ -72,8 +72,6 @@ def build_scheduler(
     archive_cfg: ArchiveConfig,
     emitter_cfg: EmitterConfig,
     seed: int,
-    warm_start_latents: np.ndarray | None = None,
-    warm_start_enabled: bool = False,
 ) -> Scheduler:
     """Construct the pyribs scheduler from config.
 
@@ -85,14 +83,6 @@ def build_scheduler(
         Emitter sigma, batch size, and count.
     seed : int
         Random seed for reproducibility.
-    warm_start_latents : np.ndarray or None
-        Warm-start latent vectors (top-K by P(active) from random sampling).
-        Shape ``(n_top, latent_dim)``. If provided, these are used as x0 for
-        emitters instead of random initialization.
-    warm_start_enabled : bool
-        Whether warm-start is enabled. If True, the archive is created with
-        threshold_min=0.0 to allow all solutions during warm-start phase.
-        Threshold filtering is handled by CMAMAELoop.
 
     Returns
     -------
@@ -102,14 +92,12 @@ def build_scheduler(
     active_dims = archive_cfg.active_dims()
     active_ranges = archive_cfg.active_ranges()
 
-    archive_threshold = 0.0 if warm_start_enabled else archive_cfg.threshold_min
-
     archive = GridArchive(
         solution_dim=archive_cfg.solution_dim,
         dims=active_dims,
         ranges=active_ranges,
         learning_rate=archive_cfg.learning_rate,
-        threshold_min=archive_threshold,
+        threshold_min=archive_cfg.threshold_min,
         seed=seed,
     )
 
@@ -124,19 +112,9 @@ def build_scheduler(
     emitters = []
     n_emitters = emitter_cfg.n_emitters
 
-    n_warm = (
-        min(len(warm_start_latents), n_emitters)
-        if warm_start_latents is not None
-        else 0
-    )
-
     for i in range(n_emitters):
         rng = np.random.default_rng(seed + i)
-
-        if i < n_warm and warm_start_latents is not None:
-            x0 = warm_start_latents[i % len(warm_start_latents)].astype(np.float64)
-        else:
-            x0 = rng.standard_normal(archive_cfg.solution_dim).astype(np.float64)
+        x0 = rng.standard_normal(archive_cfg.solution_dim).astype(np.float64)
 
         emitter = _SafeEvolutionStrategyEmitter(
             archive=archive,
@@ -166,30 +144,18 @@ class CMAMAELoop:
         Configured pyribs scheduler.
     evaluate : callable
         Function ``(z) -> EvalResult`` that scores latent vectors.
-    objective_cap : float or None
-        If set, objectives are capped at this value before archive insertion
-        to mitigate exploitation. Invalid molecules remain at
-        INVALID_MOLECULE_OBJECTIVE.
-    warm_start_n_generations : int
-        Number of generations for warm-start phase (low threshold).
-    warm_start_threshold_min : float
-        Minimum objective for archive insertion during warm-start phase.
     threshold_min : float
-        Minimum objective for archive insertion after warm-start phase.
+        Minimum objective for archive insertion.
     """
 
     def __init__(
         self,
         scheduler: Scheduler,
         evaluate,
-        objective_cap: float | None = None,
-        warm_start_n_generations: int = 0,
-        warm_start_threshold_min: float = 0.0,
         threshold_min: float = 0.0,
     ) -> None:
         self._scheduler = scheduler
         self._evaluate = evaluate
-        self._objective_cap = objective_cap
         self._archive: GridArchive = scheduler.archive
         self._result_archive: GridArchive | None = scheduler.result_archive
         self._tracker = RealObjectiveTracker()
@@ -197,9 +163,6 @@ class CMAMAELoop:
         self.last_emitter_stats: list[dict] | None = None
         self.last_emitter_insertions: list[dict] | None = None
         self.last_emitter_spread: float | None = None
-
-        self._warm_start_n_generations = warm_start_n_generations
-        self._warm_start_threshold_min = warm_start_threshold_min
         self._threshold_min = threshold_min
 
     @property
@@ -310,11 +273,10 @@ class CMAMAELoop:
         return self._archive
 
     def _apply_threshold_and_cap(self, objectives: np.ndarray, gen: int) -> np.ndarray:
-        """Apply threshold and cap to objectives based on current generation.
+        """Apply threshold to objectives.
 
-        During warm-start phase (gen < warm_start_n_generations), uses
-        warm_start_threshold_min. After warm-start, uses threshold_min.
         Invalid molecules (INVALID_MOLECULE_OBJECTIVE) are preserved.
+        Molecules below threshold_min are marked invalid.
 
         Parameters
         ----------
@@ -326,23 +288,13 @@ class CMAMAELoop:
         Returns
         -------
         np.ndarray
-            Filtered and capped objectives.
+            Thresholded objectives.
         """
         thresholded = objectives.copy()
-        if self._objective_cap is not None:
-            valid_mask = thresholded != INVALID_MOLECULE_OBJECTIVE
-            thresholded[valid_mask] = np.minimum(
-                thresholded[valid_mask], self._objective_cap
-            )
 
-        if gen < self._warm_start_n_generations:
-            current_threshold = self._warm_start_threshold_min
-        else:
-            current_threshold = self._threshold_min
-
-        if current_threshold > 0:
+        if self._threshold_min > 0:
             valid_mask = thresholded != INVALID_MOLECULE_OBJECTIVE
-            below_threshold = thresholded < current_threshold
+            below_threshold = thresholded < self._threshold_min
             thresholded[valid_mask & below_threshold] = INVALID_MOLECULE_OBJECTIVE
 
         return thresholded

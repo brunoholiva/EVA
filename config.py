@@ -21,7 +21,6 @@ class ArchiveConfig:
     dimensions: list[DimensionConfig]
     learning_rate: float
     threshold_min: float
-    objective_cap: float | None = None
 
     def active_dims(self) -> list[int]:
         """Return grid resolution for all dimensions."""
@@ -89,21 +88,13 @@ class PCALatentConfig:
 
 
 @dataclass
-class WarmStartConfig:
-    enabled: bool = False
-    n_top: int = 16
-    n_generations: int = 50
-    threshold_min: float = 0.0
-    representatives_path: str | None = None
-
-
-@dataclass
 class TensorBoardConfig:
     enabled: bool = False
     log_dir: str = "tensorboard"
     scalar_every: int = 1
     histogram_every: int = 10
     figure_every: int = 25
+    molecule_every: int = 10
 
 
 @dataclass
@@ -116,7 +107,6 @@ class ExperimentConfig:
     run: RunConfig
     output: OutputConfig
     pca: PCALatentConfig = field(default_factory=PCALatentConfig)
-    warm_start: WarmStartConfig = field(default_factory=WarmStartConfig)
     tensorboard: TensorBoardConfig = field(default_factory=TensorBoardConfig)
 
     @classmethod
@@ -143,7 +133,6 @@ class ExperimentConfig:
             dimensions=dimensions,
             learning_rate=archive_raw["learning_rate"],
             threshold_min=archive_raw["threshold_min"],
-            objective_cap=archive_raw.get("objective_cap"),
         )
 
         config = cls(
@@ -155,7 +144,6 @@ class ExperimentConfig:
             run=RunConfig(**raw.get("run", {})),
             output=OutputConfig(**raw.get("output", output_defaults)),
             pca=PCALatentConfig(**raw.get("pca", {})),
-            warm_start=WarmStartConfig(**raw.get("warm_start", {})),
             tensorboard=TensorBoardConfig(**raw.get("tensorboard", {})),
         )
         return config

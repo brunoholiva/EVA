@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 from config import ExperimentConfig
@@ -124,7 +123,6 @@ def _run_loop(
                 insertion_stats=loop.last_insertion_stats,
                 emitter_stats=loop.last_emitter_stats,
                 real_objectives=loop.real_objectives,
-                objective_cap=cfg.archive.objective_cap,
                 emitter_insertions=loop.last_emitter_insertions,
                 emitter_spread=loop.last_emitter_spread,
             )
@@ -225,46 +223,6 @@ def _save_results(
     )
 
 
-def _warm_start(
-    vae: ChemBedVAE | ProjectedVAE,
-    cfg: ExperimentConfig,
-) -> np.ndarray | None:
-    """Return latent vectors from predefined representatives to seed CMA-ES.
-
-    Loads representative SMILES from a CSV file (column ``"SMILES"``)
-    and encodes them through the VAE to obtain latent vectors used as
-    initial emitter means.
-
-    Parameters
-    ----------
-    vae : ChemBedVAE or ProjectedVAE
-        The generative model (handles PCA projection transparently).
-    cfg : ExperimentConfig
-        Experiment configuration.
-
-    Returns
-    -------
-    np.ndarray or None
-        Latent vectors, shape ``(n_top, latent_dim)``. Returns None if
-        warm-start is disabled.
-    """
-    if not cfg.warm_start.enabled:
-        return None
-
-    section("Warm-Start Initialization")
-
-    rep_path = Path(cfg.warm_start.representatives_path)
-    step(f"Loading warm-start representatives from {rep_path}")
-    rep_df = pd.read_csv(rep_path)
-    smiles = rep_df["SMILES"].dropna().tolist()
-    n_top = min(cfg.warm_start.n_top, len(smiles))
-    smiles = smiles[:n_top]
-    detail(f"Encoding {n_top} representative SMILES")
-    latents = vae.encode(smiles, batch_size=16)
-    detail(f"Latents shape: {latents.shape}")
-    return latents
-
-
 def main(argv: list[str | None] | None = None) -> None:
     """Entry point for the EVA evolution loop."""
     config_path, resume_path = _parse_args(argv)
@@ -295,31 +253,17 @@ def main(argv: list[str | None] | None = None) -> None:
         scheduler = load_scheduler(resume_from)
         start_gen = scheduler.emitters[0]._itrs
         detail(f"Resuming from generation {start_gen}")
-        warm_start_latents = None
     else:
-        warm_start_latents = _warm_start(vae, cfg)
-
         scheduler = build_scheduler(
             cfg.archive,
             cfg.emitter,
             cfg.run.seed,
-            warm_start_latents=warm_start_latents,
-            warm_start_enabled=cfg.warm_start.enabled,
         )
         start_gen = 0
 
     loop = CMAMAELoop(
         scheduler,
         evaluator,
-        objective_cap=cfg.archive.objective_cap,
-        warm_start_n_generations=(
-            cfg.warm_start.n_generations if cfg.warm_start.enabled else 0
-        ),
-        warm_start_threshold_min=(
-            cfg.warm_start.threshold_min
-            if cfg.warm_start.enabled
-            else cfg.archive.threshold_min
-        ),
         threshold_min=cfg.archive.threshold_min,
     )
 

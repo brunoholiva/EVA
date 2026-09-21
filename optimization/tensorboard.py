@@ -57,7 +57,6 @@ class TensorBoardLogger:
         insertion_stats: dict[str, int] | None = None,
         emitter_stats: list[dict] | None = None,
         real_objectives: dict[int, float] | None = None,
-        objective_cap: float | None = None,
         emitter_insertions: list[dict] | None = None,
         emitter_spread: float | None = None,
     ) -> None:
@@ -69,7 +68,7 @@ class TensorBoardLogger:
 
         if step % self._cfg.scalar_every == 0:
             self._log_result_archive_stats(report_archive, step)
-            self._log_eval_stats(result, step, real_objectives, objective_cap)
+            self._log_eval_stats(result, step, real_objectives)
             if insertion_stats is not None:
                 self._log_insertion_stats(insertion_stats, step)
             if emitter_stats is not None:
@@ -173,7 +172,6 @@ class TensorBoardLogger:
         result: EvalResult,
         step: int,
         real_objectives: dict[int, float] | None = None,
-        objective_cap: float | None = None,
     ) -> None:
         """Log batch-level evaluation stats."""
         valid_fraction = 0.0
@@ -212,11 +210,7 @@ class TensorBoardLogger:
                 "eval/mean_p_active_batch", float(active.mean()), step
             )
 
-        if (
-            objective_cap is not None
-            and real_objectives is not None
-            and len(real_objectives) > 0
-        ):
+        if real_objectives is not None and len(real_objectives) > 0:
             real_values = list(real_objectives.values())
             real_array = np.array(real_values)
             self._writer.add_scalar(
@@ -224,9 +218,6 @@ class TensorBoardLogger:
             )
             self._writer.add_scalar(
                 "eval/real_p_active_mean", float(real_array.mean()), step
-            )
-            self._writer.add_scalar(
-                "eval/n_above_cap", int((real_array > objective_cap).sum()), step
             )
             self._writer.add_scalar("eval/n_tracked", len(real_values), step)
 

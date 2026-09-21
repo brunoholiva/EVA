@@ -2,7 +2,6 @@
 solution_dim = 256
 learning_rate = 0.01
 threshold_min = 0.01
-objective_cap = 1.0
 
 [[archive.dimensions]]
 name = "fsp3"
@@ -45,14 +44,6 @@ softmax_temperature = 2.0
 [pca]
 path = "data/pca_latent.joblib"
 enabled = true
-
-[warm_start]
-enabled = false
-n_top = 16
-n_generations = 1
-threshold_min = 0.0
-representatives_path = "data/warmstart_representatives/representatives_all.csv"
-
 
 [run]
 n_generations = 250
