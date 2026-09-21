@@ -10,10 +10,6 @@ import pandas as pd
 
 from reporting.console import step
 
-# ---------------------------------------------------------------------------
-# Data serialization
-# ---------------------------------------------------------------------------
-
 _DISPLAY_COLUMNS = [
     "smiles",
     "p_active",
@@ -79,10 +75,6 @@ def _serialize_dataframe(df: pd.DataFrame) -> str:
     subset = subset.where(subset.notna(), None)
     return subset.to_json(orient="records")
 
-
-# ---------------------------------------------------------------------------
-# HTML template
-# ---------------------------------------------------------------------------
 
 _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="en">
@@ -697,11 +689,6 @@ init();
 </script>
 </body>
 </html>"""
-
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 
 def generate_html_report(

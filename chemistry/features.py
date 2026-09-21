@@ -138,7 +138,6 @@ class MoleculeFeaturizer:
         njobs = effective_n_jobs(self.n_jobs)
         batches = _chunk_list(X, njobs * 2)
 
-        # Use external progress bar if provided
         own_progress = progress is None
         if own_progress:
             columns = [

@@ -98,15 +98,107 @@ def compute_emitter_stats(scheduler: Scheduler) -> list[dict]:
     """
     stats = []
     for i, emitter in enumerate(scheduler._emitters):
-        dist = np.linalg.norm(emitter._opt.mean - emitter.x0)
+        if hasattr(emitter, "_opt"):
+            dist = np.linalg.norm(emitter._opt.mean - emitter.x0)
+        else:
+            dist = 0.0
         stats.append(
             {
                 "id": i,
                 "distance": float(dist),
-                "restarts": emitter.restarts,
+                "restarts": getattr(emitter, "restarts", 0),
             }
         )
     return stats
+
+
+def compute_emitter_spread(scheduler: Scheduler) -> float:
+    """Return the standard deviation of emitter means across all emitters.
+
+    A low value indicates all emitters are clustered in the same basin.
+
+    Parameters
+    ----------
+    scheduler : Scheduler
+        The pyribs scheduler whose emitters to inspect.
+
+    Returns
+    -------
+    float
+        Mean std of emitter means across latent dimensions.
+    """
+    means = np.array([e._opt.mean for e in scheduler._emitters if hasattr(e, "_opt")])
+    if len(means) == 0:
+        return 0.0
+    return float(np.mean(np.std(means, axis=0)))
+
+
+def compute_emitter_insertions(
+    result: EvalResult,
+    objectives: np.ndarray,
+    old_occupied: dict[int, float],
+    archive: GridArchive,
+    scheduler: Scheduler,
+) -> list[dict]:
+    """Attribute archive insertions to the emitters that produced them.
+
+    Uses ``scheduler._num_emitted`` to determine which emitter produced
+    each solution in the batch (solutions are contiguous per emitter).
+
+    Parameters
+    ----------
+    result : EvalResult
+        Scoring results for this generation.
+    objectives : np.ndarray
+        Thresholded/capped objectives passed to ``scheduler.tell``.
+    old_occupied : dict of int to float
+        Cell-index to objective snapshot taken *before* ``tell``.
+    archive : GridArchive
+        The archive insertion was performed into.
+    scheduler : Scheduler
+        The pyribs scheduler (provides emitter boundaries via
+        ``_num_emitted``).
+
+    Returns
+    -------
+    list of dict
+        Each dict has keys ``"id"``, ``"inserted_new"``,
+        ``"improved_existing"``, ``"rejected"``.
+    """
+    acceptable = _acceptable_mask(result.measures, objectives, archive)
+    all_indices = archive.index_of(result.measures)
+
+    boundaries: list[tuple[int, int]] = []
+    pos = 0
+    for n in scheduler._num_emitted:
+        boundaries.append((pos, pos + n))
+        pos += n
+
+    emitter_stats: list[dict] = []
+    for em_id, (start, end) in enumerate(boundaries):
+        inserted_new = 0
+        improved_existing = 0
+        rejected = 0
+        for i in range(start, min(end, len(objectives))):
+            if not acceptable[i]:
+                rejected += 1
+                continue
+            cell_idx = int(all_indices[i])
+            if cell_idx not in old_occupied:
+                inserted_new += 1
+            elif objectives[i] > old_occupied[cell_idx]:
+                improved_existing += 1
+            else:
+                rejected += 1
+        emitter_stats.append(
+            {
+                "id": em_id,
+                "inserted_new": inserted_new,
+                "improved_existing": improved_existing,
+                "rejected": rejected,
+            }
+        )
+    return emitter_stats
 
 
 class RealObjectiveTracker:

@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from rdkit import Chem, DataStructs
-from rdkit.Chem.rdFingerprintGenerator import GetMorganGenerator
-from rdkit.ML.Cluster import Butina
 from ribs.archives import GridArchive
+
+from chemistry.csk import cluster_by_csk
 
 
 def compute_cell_indices(
@@ -51,53 +50,22 @@ def compute_cell_indices(
 
 def cluster_smiles(
     smiles_list: list[str],
-    threshold: float = 0.75,
-    radius: int = 2,
-    n_bits: int = 2048,
+    **_kwargs,
 ) -> list[set[int]]:
-    """Cluster SMILES by Tanimoto distance.
+    """Cluster SMILES by CSK structural hash.
 
     Parameters
     ----------
     smiles_list : list of str
         SMILES strings.
-    threshold : float
-        Tanimoto distance cutoff.
-    radius : int
-        Morgan fingerprint radius.
-    n_bits : int
-        Morgan fingerprint bit length.
 
     Returns
     -------
     list of set[int]
-        Each set contains the indices of SMILES in one cluster.
+        Each set contains the indices of SMILES sharing the same
+        cyclic skeleton (CSK) hash.
     """
-    if not smiles_list:
-        return []
-
-    gen = GetMorganGenerator(radius=radius, fpSize=n_bits)
-    fps = []
-    for smi in smiles_list:
-        mol = Chem.MolFromSmiles(smi)
-        fps.append(gen.GetFingerprint(mol) if mol else None)
-
-    dists = []
-    n = len(fps)
-    for i in range(1, n):
-        for j in range(i):
-            if fps[i] is not None and fps[j] is not None:
-                dists.append(1.0 - DataStructs.TanimotoSimilarity(fps[i], fps[j]))
-            else:
-                dists.append(1.0)
-
-    clusters = Butina.ClusterData(
-        dists,
-        nPts=n,
-        distThresh=threshold,
-        isDistData=True,
-    )
-    return [set(c) for c in clusters]
+    return cluster_by_csk(smiles_list)
 
 
 def select_top_k_per_cell(
@@ -107,7 +75,7 @@ def select_top_k_per_cell(
     resolutions: list[int],
     k: int = 5,
     score_col: str = "p_active_real",
-    cluster_threshold: float = 0.75,
+    **_kwargs,
 ) -> pd.DataFrame:
     """Select up to k diverse, high-scoring representatives per archive cell.
 
@@ -125,8 +93,6 @@ def select_top_k_per_cell(
         Maximum representatives per cell.
     score_col : str
         Column used to rank representatives. Falls back to 'p_active' if missing.
-    cluster_threshold : float
-        Tanimoto distance cutoff for within-cell clustering.
 
     Returns
     -------
@@ -143,9 +109,8 @@ def select_top_k_per_cell(
     representative_indices: list[int] = []
     for _cell_index, group in working.groupby("_cell_index"):
         smiles = group["smiles"].tolist()
-        clusters = cluster_smiles(smiles, threshold=cluster_threshold)
+        clusters = cluster_smiles(smiles)
 
-        # Pick highest-scoring member of each cluster.
         cluster_best: list[int] = []
         for cluster in clusters:
             cluster_df_indices = [group.index[i] for i in cluster]
@@ -153,7 +118,6 @@ def select_top_k_per_cell(
             best_idx = cluster_scores.idxmax()
             cluster_best.append(best_idx)
 
-        # Keep top-k by score.
         best_scores = working.loc[cluster_best, score_col]
         top_k = best_scores.sort_values(ascending=False).head(k).index.tolist()
         representative_indices.extend(top_k)

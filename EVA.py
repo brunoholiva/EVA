@@ -125,7 +125,15 @@ def _run_loop(
                 emitter_stats=loop.last_emitter_stats,
                 real_objectives=loop.real_objectives,
                 objective_cap=cfg.archive.objective_cap,
+                emitter_insertions=loop.last_emitter_insertions,
+                emitter_spread=loop.last_emitter_spread,
             )
+            if gen % cfg.tensorboard.molecule_every == 0:
+                tb_logger.log_molecules(
+                    step=gen,
+                    smiles=result.smiles,
+                    p_active=result.p_active,
+                )
             for i in range(len(result.smiles)):
                 eval_num = eval_counter[0] + i + 1
                 valid = result.objectives[i] != INVALID_MOLECULE_OBJECTIVE

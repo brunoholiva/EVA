@@ -8,9 +8,11 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import selfies as sf
+import torch
 from joblib import Parallel, delayed
 from rdkit import Chem
 
+from evaluation.dimensions import SPECIAL_DIMENSIONS
 from optimization.constants import INVALID_MOLECULE_OBJECTIVE
 from reporting.suppress import suppress_joblib_warnings
 
@@ -141,37 +143,36 @@ class Evaluator:
     def _score_valid(
         self, valid_smiles: list[str], timings: EvalTimings
     ) -> _ScoreBundle | None:
-        """Score valid SMILES with all scorers.
-
-        Phase 1: Featurization (CPU-heavy, all cores).
-        Phase 2: CPU scorers (MolBehavior + Tanimoto distances) run
-            concurrently with GPU-bound TabPFN prediction.
-        """
+        """Score valid SMILES with all scorers."""
         if not valid_smiles:
             return None
 
         t1 = time.time()
+        from concurrent.futures import ThreadPoolExecutor
+
         X = self._featurizer.transform(valid_smiles)
         timings.featurize_predict = time.time() - t1
 
         t1 = time.time()
-        from concurrent.futures import ThreadPoolExecutor
-
         with ThreadPoolExecutor(max_workers=1) as pool:
             cpu_future = pool.submit(self._compute_cpu_scores, valid_smiles)
-            _, probs = self._activity_fn(X, self._activity_model)
+
+            raw_logits = self._activity_model.predict_raw_logits(X)
+            probs = torch.softmax(torch.from_numpy(raw_logits), dim=-1).numpy()
+            p_per_est = probs[:, :, 1]
+            pa = p_per_est.mean(axis=0).astype(np.float64)
+
             dim_scores = cpu_future.result()
 
         timings.cpu_scorers = time.time() - t1
 
-        pa = probs[:, 1]
         return _ScoreBundle(dim_scores=dim_scores, pa=pa)
 
     def _compute_cpu_scores(self, valid_smiles: list[str]) -> dict[str, np.ndarray]:
         """Compute CPU-bound molecular scores for valid SMILES.
 
         Parses molecules once, then computes only the enabled dimensions.
-        Fingerprints are lazily computed only if needed (e.g., for AD dimension).
+        Fingerprints are lazily computed only if needed (for max_tanimoto).
         Scaffold-based dimensions use Murcko scaffold SMILES instead.
 
         Parameters
@@ -192,6 +193,15 @@ class Evaluator:
 
         dim_scores = {}
         for dim_name in self._archive_cfg.active_dimension_names():
+            if dim_name in SPECIAL_DIMENSIONS:
+                if dim_name == "max_tanimoto":
+                    fps, valid_mask = parsed.fingerprints
+                    max_tan = np.ones(len(valid_smiles), dtype=np.float32)
+                    if fps is not None and len(fps) > 0:
+                        max_tan[valid_mask] = self._ad.compute_max_tanimoto(fps)
+                    dim_scores["max_tanimoto"] = max_tan
+                continue
+
             use_scaffold = dim_configs[dim_name].scaffold
 
             if use_scaffold:
@@ -203,7 +213,7 @@ class Evaluator:
             else:
                 compute_parsed = parsed
 
-            dim_scores[dim_name] = compute_dimension(dim_name, compute_parsed, self._ad)
+            dim_scores[dim_name] = compute_dimension(dim_name, compute_parsed)
 
         return dim_scores
 
@@ -234,11 +244,6 @@ class Evaluator:
             for k, dim_name in enumerate(self._archive_cfg.active_dimension_names()):
                 measures[scored_positions, k] = scores.dim_scores[dim_name]
 
-            # pyribs requires finite measures. Some valid molecules (e.g. those
-            # containing metals like Na/Li/Mg) make certain descriptors return
-            # NaN (BCUT2D_* raise on Gasteiger charge failure). Treat them like
-            # invalid molecules: rejected by the objective, finite sentinel so
-            # the whole-batch validation in GridArchive.add() passes.
             non_finite = ~np.isfinite(measures[scored_positions]).all(axis=1)
             if non_finite.any():
                 bad_idx = scored_positions[non_finite]

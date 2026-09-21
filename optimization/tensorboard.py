@@ -58,6 +58,8 @@ class TensorBoardLogger:
         emitter_stats: list[dict] | None = None,
         real_objectives: dict[int, float] | None = None,
         objective_cap: float | None = None,
+        emitter_insertions: list[dict] | None = None,
+        emitter_spread: float | None = None,
     ) -> None:
         """Log generation metrics to TensorBoard."""
         if self._writer is None:
@@ -72,6 +74,10 @@ class TensorBoardLogger:
                 self._log_insertion_stats(insertion_stats, step)
             if emitter_stats is not None:
                 self._log_emitter_stats(emitter_stats, step)
+            if emitter_insertions is not None:
+                self._log_emitter_insertions(emitter_insertions, step)
+            if emitter_spread is not None:
+                self._writer.add_scalar("emitter/spread", emitter_spread, step)
 
         if step % self._cfg.histogram_every == 0:
             self._log_archive_histograms(report_archive, dimension_names, step)
@@ -80,6 +86,63 @@ class TensorBoardLogger:
             figure = create_archive_figure(report_archive, dimension_names)
             if figure is not None:
                 self._writer.add_figure("figures/archive", figure, step)
+
+    def log_molecules(
+        self,
+        step: int,
+        smiles: list[str],
+        p_active: np.ndarray,
+        n_samples: int = 4,
+    ) -> None:
+        """Log rendered molecule images from the current batch.
+
+        Picks ``n_samples`` valid molecules with the highest P(active),
+        renders them in a grid with RDKit, and logs to TensorBoard.
+
+        Parameters
+        ----------
+        step : int
+            Current generation number.
+        smiles : list of str
+            SMILES strings from the current batch.
+        p_active : np.ndarray
+            P(active) values for each SMILES.
+        n_samples : int
+            Number of molecules to render.
+        """
+        if self._writer is None:
+            return
+
+        from rdkit import Chem
+        from rdkit.Chem.Draw import MolsToGridImage
+
+        scored = []
+        for smi, pa in zip(smiles, p_active):
+            mol = Chem.MolFromSmiles(smi) if smi else None
+            if mol is not None:
+                scored.append((mol, smi, float(pa)))
+        if not scored:
+            return
+
+        scored.sort(key=lambda x: x[2], reverse=True)
+        picked = scored[:n_samples]
+
+        mols = [m for m, _, _ in picked]
+        legends = [f"P={pa:.3f}" for _, _, pa in picked]
+
+        img = MolsToGridImage(
+            mols,
+            molsPerRow=min(len(mols), 3),
+            subImgSize=(400, 400),
+            legends=legends,
+        )
+        grid = np.array(img).transpose(2, 0, 1)
+        self._writer.add_image("molecules/samples", grid, step, dataformats="CHW")
+        self._writer.add_text(
+            "molecules/smiles",
+            "\n".join(f"P={pa:.3f}: {smi}" for _, smi, pa in picked),
+            step,
+        )
 
     def close(self) -> None:
         """Close the writer if it was created."""
@@ -149,7 +212,6 @@ class TensorBoardLogger:
                 "eval/mean_p_active_batch", float(active.mean()), step
             )
 
-        # Log real P(active) statistics if objective cap is enabled
         if (
             objective_cap is not None
             and real_objectives is not None
@@ -184,6 +246,18 @@ class TensorBoardLogger:
                 f"emitter/{i}/distance", float(es["distance"]), step
             )
             self._writer.add_scalar(f"emitter/{i}/restarts", int(es["restarts"]), step)
+
+    def _log_emitter_insertions(self, stats: list[dict], step: int) -> None:
+        """Log per-emitter archive insertion counts."""
+        for es in stats:
+            i = es["id"]
+            self._writer.add_scalar(
+                f"emitter/{i}/inserted_new", es["inserted_new"], step
+            )
+            self._writer.add_scalar(
+                f"emitter/{i}/improved_existing", es["improved_existing"], step
+            )
+            self._writer.add_scalar(f"emitter/{i}/rejected", es["rejected"], step)
 
     def _log_archive_histograms(
         self, archive: GridArchive, dimension_names: list[str], step: int

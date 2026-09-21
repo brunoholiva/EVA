@@ -30,7 +30,6 @@ def _suppress_tabpfn_progress():
     """Suppress TabPFN's tqdm progress bars."""
     from contextlib import redirect_stderr
 
-    # Redirect stderr to devnull to suppress tqdm
     with redirect_stderr(open(os.devnull, "w")):
         yield
 
@@ -106,7 +105,6 @@ def predict_from_features(
             f"Feature dimension mismatch: got {X.shape[1]}, model expects {expected}"
         )
 
-    # Suppress TabPFN's tqdm progress bars
     with _suppress_tabpfn_progress():
         probs = model.predict_proba(X)
     preds = model.classes_[probs.argmax(axis=1)]

@@ -5,9 +5,9 @@ threshold_min = 0.01
 objective_cap = 1.0
 
 [[archive.dimensions]]
-name = "ad"
+name = "fsp3"
 resolution = 15
-range = [0.0, 0.9]
+range = [0.0, 1.0]
 scaffold = false
 
 
@@ -23,7 +23,7 @@ sigma0 = 0.5
 batch_size = 32
 n_emitters = 16
 restart_mode = "hybrid"
-random_restart_prob = 0.7
+random_restart_prob = 0.5
 
 [generative]
 model_repo_id = "3BioCompBio/chembed-default"
@@ -47,7 +47,7 @@ path = "data/pca_latent.joblib"
 enabled = true
 
 [warm_start]
-enabled = true
+enabled = false
 n_top = 16
 n_generations = 1
 threshold_min = 0.0
@@ -55,14 +55,14 @@ representatives_path = "data/warmstart_representatives/representatives_all.csv"
 
 
 [run]
-n_generations = 1000
+n_generations = 250
 eval_every = 20
 seed = 42
 resume_from = ""
 
 [output]
 output_dir = "results"
-run_name = "no_repeats_novel"
+run_name = "run1"
 
 [tensorboard]
 enabled = true
@@ -70,3 +70,4 @@ log_dir = "tensorboard"
 scalar_every = 1
 histogram_every = 10
 figure_every = 3
+molecule_every = 10

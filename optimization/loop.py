@@ -15,6 +15,8 @@ from optimization.constants import INVALID_MOLECULE_OBJECTIVE
 from optimization.evaluator import EvalResult
 from optimization.tracking import (
     RealObjectiveTracker,
+    compute_emitter_insertions,
+    compute_emitter_spread,
     compute_emitter_stats,
     compute_insertion_stats,
     occupied_cells,
@@ -120,13 +122,15 @@ def build_scheduler(
     )
 
     emitters = []
+    n_emitters = emitter_cfg.n_emitters
+
     n_warm = (
-        min(len(warm_start_latents), emitter_cfg.n_emitters)
+        min(len(warm_start_latents), n_emitters)
         if warm_start_latents is not None
         else 0
     )
 
-    for i in range(emitter_cfg.n_emitters):
+    for i in range(n_emitters):
         rng = np.random.default_rng(seed + i)
 
         if i < n_warm and warm_start_latents is not None:
@@ -191,6 +195,8 @@ class CMAMAELoop:
         self._tracker = RealObjectiveTracker()
         self.last_insertion_stats: dict[str, int] | None = None
         self.last_emitter_stats: list[dict] | None = None
+        self.last_emitter_insertions: list[dict] | None = None
+        self.last_emitter_spread: float | None = None
 
         self._warm_start_n_generations = warm_start_n_generations
         self._warm_start_threshold_min = warm_start_threshold_min
@@ -283,6 +289,14 @@ class CMAMAELoop:
                 self._archive,
             )
             self.last_emitter_stats = compute_emitter_stats(self._scheduler)
+            self.last_emitter_insertions = compute_emitter_insertions(
+                result,
+                objectives,
+                old_primary_cells,
+                self._archive,
+                self._scheduler,
+            )
+            self.last_emitter_spread = compute_emitter_spread(self._scheduler)
 
             if result.timings is not None:
                 result.timings.archive_ops = time.time() - t_archive_start

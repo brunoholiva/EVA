@@ -20,10 +20,6 @@ _RADIUS = 2
 _N_BITS = 2048
 _CHUNK_SIZE = 4096
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def smiles_to_svg(smiles: str, width: int = 200, height: int = 160) -> str | None:
     """Generate an SVG string for a SMILES string using Python RDKit.
@@ -51,11 +47,6 @@ def smiles_to_svg(smiles: str, width: int = 200, height: int = 160) -> str | Non
     drawer.DrawMolecule(mol)
     drawer.FinishDrawing()
     return drawer.GetDrawingText()
-
-
-# ---------------------------------------------------------------------------
-# Pipeline steps
-# ---------------------------------------------------------------------------
 
 
 def dedup_evaluations(df: pd.DataFrame) -> pd.DataFrame:
@@ -158,11 +149,6 @@ def remove_training_actives(
     return result
 
 
-# ---------------------------------------------------------------------------
-# Similarity to training
-# ---------------------------------------------------------------------------
-
-
 def compute_max_tanimoto_to_training(
     candidates: pd.DataFrame,
     training_smiles: list[str],
@@ -241,18 +227,12 @@ def _compute_morgan_matrix(smiles: list[str]) -> np.ndarray:
     return np.array(rows, dtype=np.float32)
 
 
-# ---------------------------------------------------------------------------
-# Clustering
-# ---------------------------------------------------------------------------
-
-
 def tag_with_clusters(
     df: pd.DataFrame,
-    threshold: float = 0.65,
     smiles_col: str = "smiles",
     score_col: str = "p_active",
 ) -> pd.DataFrame:
-    """Cluster molecules by Butina and tag with cluster_id / cluster_size.
+    """Cluster molecules by CSK structural hash and tag with cluster_id / cluster_size.
 
     Cluster IDs are reordered so that cluster 0 contains the highest-scoring
     molecule, cluster 1 the second-highest, etc.
@@ -261,8 +241,6 @@ def tag_with_clusters(
     ----------
     df : DataFrame
         Candidates.
-    threshold : float
-        Tanimoto distance cutoff (1 - similarity).
     smiles_col : str
         Column with SMILES.
     score_col : str
@@ -275,9 +253,9 @@ def tag_with_clusters(
     """
     from reporting.multi_rep_archive import cluster_smiles
 
-    step(f"Butina clustering (threshold={threshold})")
+    step("CSK structural clustering")
     result = df.copy()
-    clusters = cluster_smiles(result[smiles_col].tolist(), threshold=threshold)
+    clusters = cluster_smiles(result[smiles_col].tolist())
 
     cluster_ids = np.full(len(result), -1, dtype=int)
     cluster_sizes = np.zeros(len(result), dtype=int)
@@ -298,11 +276,6 @@ def tag_with_clusters(
     n_clusters = len(ordered)
     step(f"  {n_clusters} clusters, sizes {cluster_sizes.min()}–{cluster_sizes.max()}")
     return result
-
-
-# ---------------------------------------------------------------------------
-# Cytotoxicity scoring
-# ---------------------------------------------------------------------------
 
 
 def score_cytotox(
@@ -362,15 +335,11 @@ def score_cytotox(
     return result
 
 
-# ---------------------------------------------------------------------------
-# AD scoring
-# ---------------------------------------------------------------------------
-
-
 def score_ad(
     df: pd.DataFrame,
     ad_model_path: Path | str,
     smiles_col: str = "smiles",
+    chunk_size: int = 2000,
 ) -> pd.DataFrame:
     """Compute applicability domain scores.
 
@@ -382,6 +351,8 @@ def score_ad(
         Path to the kNN AD model joblib artifact.
     smiles_col : str
         Column with SMILES.
+    chunk_size : int
+        Number of query molecules per batch to avoid OOM on large sets.
 
     Returns
     -------
@@ -403,17 +374,16 @@ def score_ad(
     valid_mask = fps.any(axis=1)
     ad_scores = np.full(len(df), 1.0)
     if valid_mask.any():
-        ad_scores[valid_mask] = scorer.compute_from_fps(fps[valid_mask])
+        valid_indices = np.where(valid_mask)[0]
+        for start in range(0, len(valid_indices), chunk_size):
+            batch_idx = valid_indices[start : start + chunk_size]
+            ad_scores[batch_idx] = scorer.compute_from_fps(fps[batch_idx])
 
     result = df.copy()
     result["ad_score"] = ad_scores
     step(f"  AD score mean: {np.mean(ad_scores):.3f}")
     return result
 
-
-# ---------------------------------------------------------------------------
-# Retrosynthesis
-# ---------------------------------------------------------------------------
 
 _AIZYNTH_CONFIG = "data/aizynth/config.yml"
 
@@ -637,11 +607,6 @@ def render_retro_routes(
     return images
 
 
-# ---------------------------------------------------------------------------
-# Composite ranking
-# ---------------------------------------------------------------------------
-
-
 def rank_candidates(
     df: pd.DataFrame,
     higher_better: list[str] | None = None,
@@ -697,11 +662,6 @@ def rank_candidates(
         result = result.sort_values("rank_composite").reset_index(drop=True)
 
     return result
-
-
-# ---------------------------------------------------------------------------
-# Retrosynthesis integration
-# ---------------------------------------------------------------------------
 
 
 def run_retrosynthesis(
@@ -766,11 +726,6 @@ def run_retrosynthesis(
     return result
 
 
-# ---------------------------------------------------------------------------
-# Export
-# ---------------------------------------------------------------------------
-
-
 def export_candidates_csv(df: pd.DataFrame, path: Path | str) -> Path:
     """Save candidates DataFrame to CSV.
 
@@ -793,23 +748,17 @@ def export_candidates_csv(df: pd.DataFrame, path: Path | str) -> Path:
     return path
 
 
-# ---------------------------------------------------------------------------
-# Full pipeline
-# ---------------------------------------------------------------------------
-
-
 def run_pipeline(
     all_evaluations_path: Path | str,
     training_data_path: Path | str = "data/predictor/predictor_training_data.csv",
     ad_model_path: Path | str = "data/predictor/ad_model.joblib",
     cytotox_models: dict[str, Path | str] | None = None,
     p_active_min: float = 0.6,
-    cluster_threshold: float = 0.65,
     device: str = "cuda",
 ) -> pd.DataFrame:
     """Run the full post-run candidate pipeline.
 
-    Steps: dedup → activity filter → remove training → similarity →
+    Steps: load → activity filter → dedup → remove training → similarity →
     cluster → cytotox → AD.
 
     Parameters
@@ -824,8 +773,6 @@ def run_pipeline(
         ``{suffix: model_path}`` for cytotox models.
     p_active_min : float
         P(active) threshold.
-    cluster_threshold : float
-        Butina distance cutoff.
     device : str
         Device for TabPFN inference.
 
@@ -836,32 +783,25 @@ def run_pipeline(
     """
     section("Candidate Pipeline")
 
-    # 1. Load and dedup
     raw = pd.read_csv(all_evaluations_path)
     step(f"Loaded {len(raw):,} rows from {all_evaluations_path}")
-    candidates = dedup_evaluations(raw)
 
-    # 2. Activity filter
-    candidates = filter_by_activity(candidates, p_active_min)
+    candidates = filter_by_activity(raw, p_active_min)
 
-    # 3. Remove training actives
+    candidates = dedup_evaluations(candidates)
+
     training_smiles_list = sorted(load_training_actives(training_data_path))
     candidates = remove_training_actives(candidates, set(training_smiles_list))
 
-    # 4. Similarity to training
     candidates = compute_max_tanimoto_to_training(candidates, training_smiles_list)
 
-    # 5. Cluster
-    candidates = tag_with_clusters(candidates, threshold=cluster_threshold)
+    candidates = tag_with_clusters(candidates)
 
-    # 6. Cytotox
     if cytotox_models:
         candidates = score_cytotox(candidates, cytotox_models, device=device)
 
-    # 7. AD
     candidates = score_ad(candidates, ad_model_path)
 
-    # 8. Pre-retro composite rank
     higher = ["p_active"]
     lower = [c for c in candidates.columns if c.startswith("p_cytotox_")]
     weights = {"p_active": 4.0}
@@ -883,7 +823,6 @@ def run_full_report(
     ad_model_path: Path | str = "data/predictor/ad_model.joblib",
     cytotox_models: dict[str, Path | str] | None = None,
     p_active_min: float = 0.6,
-    cluster_threshold: float = 0.65,
     retro_enabled: bool = False,
     retro_top_n: int = 3,
     retro_cap: int = 100,
@@ -911,8 +850,6 @@ def run_full_report(
         Cytotox model paths.
     p_active_min : float
         P(active) threshold.
-    cluster_threshold : float
-        Butina threshold.
     retro_enabled : bool
         Whether to run retrosynthesis.
     retro_top_n : int
@@ -938,18 +875,15 @@ def run_full_report(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Run core pipeline
     candidates = run_pipeline(
         all_evaluations_path,
         training_data_path=training_data_path,
         ad_model_path=ad_model_path,
         cytotox_models=cytotox_models,
         p_active_min=p_active_min,
-        cluster_threshold=cluster_threshold,
         device=device,
     )
 
-    # Optional retrosynthesis
     retro_images = {}
     if retro_enabled:
         candidates = run_retrosynthesis(
@@ -974,7 +908,6 @@ def run_full_report(
             candidates, higher_better=higher, lower_better=lower, weights=weights
         )
 
-        # Render route images for solved molecules
         solved = candidates.loc[
             candidates["retro_solved"] == True, "smiles"  # noqa: E712
         ].tolist()
@@ -991,10 +924,8 @@ def run_full_report(
                 max_transforms=retro_max_transforms,
             )
 
-    # Export CSV
     csv_path = export_candidates_csv(candidates, output_dir / "candidates.csv")
 
-    # Generate molecule SVGs for HTML report
     step("Generating molecule SVGs for report")
     all_smiles = set(candidates["smiles"].tolist())
     if "similar_training_smiles" in candidates.columns:
@@ -1008,7 +939,6 @@ def run_full_report(
             mol_images[smi] = svg
     step(f"  Generated {len(mol_images)} molecule SVGs")
 
-    # Export HTML report
     from reporting.html_report import generate_html_report
 
     generate_html_report(

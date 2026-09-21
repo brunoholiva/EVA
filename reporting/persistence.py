@@ -83,7 +83,6 @@ def _export_archive_csv(
         "p_active": arch_data["objective"][order],
     }
 
-    # Add real P(active) if available
     if real_objectives is not None:
         cell_indices = arch_data["index"][order]
         data["p_active_real"] = [
