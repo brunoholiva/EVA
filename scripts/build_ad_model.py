@@ -71,6 +71,8 @@ def build_model(
     radius: int,
     n_bits: int,
     n_neighbors: int,
+    target_col: str | None = None,
+    target_val: int | str | None = None,
 ) -> None:
     """Build and save the kNN applicability domain model.
 
@@ -85,11 +87,20 @@ def build_model(
     radius : int
         Morgan fingerprint radius.
     n_bits : int
-        Fingerprint bit length.
+        Morgan fingerprint bit length.
     n_neighbors : int
         Number of nearest neighbors for the kNN model.
+    target_col : str or None
+        If given, filter the CSV to rows where this column equals
+        ``target_val`` before computing fingerprints. Used to fit the
+        AD model on a subset (e.g. actives only).
+    target_val : int or str or None
+        Value to match in ``target_col``. Ignored if ``target_col`` is None.
     """
     df = pd.read_csv(csv_path)
+    if target_col is not None and target_val is not None:
+        df = df[df[target_col] == target_val]
+        step(f"Filtered to {len(df):,} rows where {target_col} == {target_val}")
     smiles_list = df[smiles_col].dropna().tolist()
     step(f"Loaded {len(smiles_list):,} SMILES from {csv_path}")
 
@@ -151,7 +162,21 @@ def main() -> None:
     parser.add_argument("--radius", type=int, default=RADIUS_DEFAULT)
     parser.add_argument("--n_bits", type=int, default=N_BITS_DEFAULT)
     parser.add_argument("--n_neighbors", type=int, default=N_NEIGHBORS_DEFAULT)
+    parser.add_argument(
+        "--target_col",
+        default=None,
+        help="Column to filter on (e.g. 'target'). If omitted, uses all rows.",
+    )
+    parser.add_argument(
+        "--target_val",
+        default=None,
+        help="Value to match in target_col (e.g. '1' for actives only).",
+    )
     args = parser.parse_args()
+
+    target_val_typed: int | str | None = args.target_val
+    if args.target_val is not None and args.target_val.isdigit():
+        target_val_typed = int(args.target_val)
 
     build_model(
         csv_path=Path(args.csv),
@@ -160,6 +185,8 @@ def main() -> None:
         radius=args.radius,
         n_bits=args.n_bits,
         n_neighbors=args.n_neighbors,
+        target_col=args.target_col,
+        target_val=target_val_typed,
     )
 
 
