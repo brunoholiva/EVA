@@ -31,8 +31,12 @@ def generic_scaffold_hash(smiles: str) -> str:
     scaffold = GetScaffoldForMol(mol)
     if not scaffold or not scaffold.GetRingInfo().NumRings():
         return "acyclic"
-    generic = MakeScaffoldGeneric(scaffold)
-    return Chem.MolToSmiles(generic)
+    generic = Chem.MolToSmiles(scaffold)
+    try:
+        generic = Chem.MolToSmiles(MakeScaffoldGeneric(scaffold))
+    except Exception:
+        pass
+    return generic
 
 
 def cluster_by_generic_scaffold(smiles_list: list[str]) -> list[set[int]]:
