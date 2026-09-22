@@ -16,21 +16,22 @@ N_NEIGHBORS_DEFAULT: int = 5
 
 
 class ADScorer:
-    """Compute applicability domain score for candidate molecules.
+    """Compute applicability domain and max-Tanimoto scores for candidates.
 
-    The score is the mean Tanimoto distance (1 - similarity) to the *k* nearest
-    neighbors in the antibiotic training set, computed via batch matrix
-    multiplication on cached training fingerprints.
+    Loads cached training fingerprints from a joblib artifact and provides
+    two scoring methods:
 
-    *  Score ≈ 0.0 → molecule is very similar to known antibiotics
-    *  Score ≈ 1.0 → molecule is far from the training manifold
+    * ``compute_from_fps`` — mean Tanimoto *distance* to k-nearest neighbors
+      (legacy AD dimension, kept for backward compatibility).
+    * ``compute_max_tanimoto`` — max Tanimoto *similarity* to any training
+      molecule (replaces AD as an archive dimension).
 
     Parameters
     ----------
     model_path : Path
         Path to the joblib artifact built by ``build_ad_model.py``.
     n_neighbors : int, default=5
-        Number of nearest neighbors to average over.
+        Number of nearest neighbors to average over (for AD only).
     """
 
     def __init__(
@@ -84,3 +85,27 @@ class ADScorer:
         return batch_tanimoto_topk(
             fps, self._train_fps, self._train_sum, self._n_neighbors
         )
+
+    def compute_max_tanimoto(self, fps: np.ndarray) -> np.ndarray:
+        """Compute max Tanimoto similarity to any training molecule.
+
+        Uses batch matrix multiplication for efficient computation over
+        the full training set.
+
+        Parameters
+        ----------
+        fps : np.ndarray of shape ``(n, n_bits)``
+            Morgan fingerprints for valid query molecules (float32).
+
+        Returns
+        -------
+        np.ndarray of shape ``(n,)``
+            Max Tanimoto similarity to any training molecule.
+            Values in ``[0.0, 1.0]``. Higher = more similar to a
+            known molecule.
+        """
+        batch_sum = fps.sum(axis=1)
+        intersection = fps @ self._train_fps.T
+        union = batch_sum[:, None] + self._train_sum[None, :] - intersection
+        tanimoto = intersection / (union + 1e-8)
+        return tanimoto.max(axis=1).astype(np.float32)
