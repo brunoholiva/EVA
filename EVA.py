@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from config import ExperimentConfig
@@ -13,6 +14,8 @@ from generative import ChemBedVAE, ProjectedVAE
 from optimization import Evaluator, TensorBoardLogger, build_scheduler
 from optimization.constants import INVALID_MOLECULE_OBJECTIVE
 from optimization.loop import CMAMAELoop
+from optimization.tracking import concentration_gini
+from chemistry.scaffolds import cluster_by_generic_scaffold
 from reporting.console import detail, make_progress_bar, section, step
 from reporting.persistence import load_scheduler, save_archive, save_scheduler
 from reporting.reporting import print_generation, print_results
@@ -58,12 +61,16 @@ def _load_vae(cfg: ExperimentConfig) -> ChemBedVAE | ProjectedVAE:
 
 
 def _load_scorers(cfg: ExperimentConfig):
-    """Load AD scorer, TabPFN, and featurizer."""
+    """Load TabPFN and featurizer. Load AD scorer only if max_tanimoto is enabled."""
     step("Loading scorers")
-    ad = ADScorer(
-        model_path=cfg.ad.ad_model_path,
-        n_neighbors=cfg.ad.n_neighbors,
-    )
+    dim_names = cfg.archive.active_dimension_names()
+    if cfg.ad is not None and "max_tanimoto" in dim_names:
+        ad = ADScorer(
+            model_path=cfg.ad.ad_model_path,
+            n_neighbors=cfg.ad.n_neighbors,
+        )
+    else:
+        ad = None
     tabpfn = load_tabpfn(
         path=cfg.activity.model_path,
         device=cfg.activity.device,
@@ -95,6 +102,7 @@ def _run_loop(
 
     all_evals: list[tuple[int, str, float, bool, int]] = []
     eval_counter = [start_gen * cfg.emitter.batch_size * cfg.emitter.n_emitters]
+    oracle_counter = [0]
 
     if start_gen > 0:
         existing_csv = output_dir / "all_evaluations.csv"
@@ -105,6 +113,7 @@ def _run_loop(
                 for r in existing.itertuples(index=False)
             ]
             eval_counter = [int(existing["eval"].max())]
+            oracle_counter = [int(existing["valid"].sum())]
             detail(
                 f"Loaded {len(all_evals):,} existing evaluations from {existing_csv}"
             )
@@ -148,6 +157,19 @@ def _run_loop(
                 else:
                     all_evals.append((eval_num, "", float("nan"), False, gen))
             eval_counter[0] += len(result.smiles)
+
+            report_archive = (
+                loop.result_archive if loop.result_archive is not None else archive
+            )
+            stats = report_archive.stats
+            n_valid = int(result.n_valid)
+            oracle_counter[0] += n_valid
+            if n_valid > 0:
+                tb_logger.log_coverage_checkpoint(
+                    float(stats.coverage),
+                    int(stats.num_elites),
+                    oracle_counter[0],
+                )
 
         def _on_progress(gen, result, archive):
             """Print generation table and save state at intervals."""
@@ -291,6 +313,40 @@ def main(argv: list[str | None] | None = None) -> None:
             output_dir,
             cfg.archive.active_dimension_names(),
         )
+
+        report_archive = (
+            loop.result_archive if loop.result_archive is not None else loop.archive
+        )
+        if len(report_archive) > 0:
+            arch_data = report_archive.data()
+            smiles = vae.decode(arch_data["solution"])
+            clusters = cluster_by_generic_scaffold(smiles)
+            n_unique = len(clusters)
+            largest_frac = (
+                max(len(c) for c in clusters) / len(smiles) if smiles else 0.0
+            )
+            gini = concentration_gini(loop.emitter_insertion_totals)
+            real_objs = (
+                loop.result_real_objectives
+                if loop.result_archive is not None
+                else loop.real_objectives
+            )
+            real_values = list(real_objs.values())
+            if real_values:
+                real_arr = np.array(real_values)
+                fraction_above = float((real_arr > 0.6).mean())
+                best_obj = float(real_arr.max())
+            else:
+                fraction_above = 0.0
+                best_obj = 0.0
+            tb_logger.log_archive_metrics(
+                n_unique, largest_frac, gini, fraction_above, best_obj
+            )
+            detail(
+                f"Scaffolds: {n_unique} unique, largest {largest_frac:.1%} | "
+                f"Emitter Gini: {gini:.3f} | "
+                f"Frac>0.6: {fraction_above:.1%} | Best P(active): {best_obj:.4f}"
+            )
     finally:
         tb_logger.close()
 

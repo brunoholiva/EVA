@@ -21,6 +21,7 @@ class TensorBoardLogger:
     def __init__(self, cfg: TensorBoardConfig, output_dir: str | Path) -> None:
         self._cfg = cfg
         self._writer = None
+        self._last_coverage_boundary: int = -1
 
         if not cfg.enabled:
             return
@@ -142,6 +143,67 @@ class TensorBoardLogger:
             "\n".join(f"P={pa:.3f}: {smi}" for _, smi, pa in picked),
             step,
         )
+
+    def log_coverage_checkpoint(
+        self, coverage: float, num_elites: int, oracle_calls: int
+    ) -> None:
+        """Log coverage at fixed oracle-call checkpoints.
+
+        The x-axis is cumulative valid oracle calls, making curves
+        comparable across runs with different batch sizes or generation counts.
+
+        Parameters
+        ----------
+        coverage : float
+            Fraction of archive cells currently occupied.
+        num_elites : int
+            Number of elites in the archive.
+        oracle_calls : int
+            Cumulative number of valid (TabPFN-evaluated) molecules so far.
+        """
+        if self._writer is None:
+            return
+        boundary = oracle_calls // self._cfg.coverage_every
+        if boundary <= self._last_coverage_boundary:
+            return
+        self._last_coverage_boundary = boundary
+        self._writer.add_scalar("benchmark/coverage", coverage, oracle_calls)
+        self._writer.add_scalar("benchmark/num_elites", num_elites, oracle_calls)
+
+    def log_archive_metrics(
+        self,
+        scaffold_n_unique: int,
+        scaffold_largest_frac: float,
+        emitter_gini: float,
+        fraction_above_0_6: float,
+        best_objective: float,
+    ) -> None:
+        """Log final archive diversity, concentration, and quality metrics.
+
+        Call once after the loop finishes.
+
+        Parameters
+        ----------
+        scaffold_n_unique : int
+            Number of unique generic scaffolds in the final archive.
+        scaffold_largest_frac : float
+            Fraction of the archive occupied by the largest scaffold cluster.
+        emitter_gini : float
+            Gini coefficient of cumulative per-emitter insertions.
+        fraction_above_0_6 : float
+            Fraction of archive elites with real P(active) > 0.6.
+        best_objective : float
+            Best real P(active) in the archive.
+        """
+        if self._writer is None:
+            return
+        self._writer.add_scalar("benchmark/scaffold_n_unique", scaffold_n_unique, 0)
+        self._writer.add_scalar(
+            "benchmark/scaffold_largest_frac", scaffold_largest_frac, 0
+        )
+        self._writer.add_scalar("benchmark/emitter_gini", emitter_gini, 0)
+        self._writer.add_scalar("benchmark/fraction_above_0_6", fraction_above_0_6, 0)
+        self._writer.add_scalar("benchmark/best_objective", best_objective, 0)
 
     def close(self) -> None:
         """Close the writer if it was created."""

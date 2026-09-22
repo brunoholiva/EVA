@@ -112,6 +112,33 @@ def compute_emitter_stats(scheduler: Scheduler) -> list[dict]:
     return stats
 
 
+def concentration_gini(counts: list[int]) -> float:
+    """Return the Gini coefficient of per-emitter insertion counts.
+
+    Parameters
+    ----------
+    counts : list of int
+        Cumulative insertion counts per emitter (length = n_emitters).
+
+    Returns
+    -------
+    float
+        Gini coefficient in [0, 1].  0 = perfectly equal,
+        1 = all insertions from a single emitter.
+    """
+    n = len(counts)
+    if n <= 1 or sum(counts) == 0:
+        return 0.0
+    sorted_counts = sorted(counts)
+    total = sum(sorted_counts)
+    if total == 0:
+        return 0.0
+    cumulative = 0.0
+    for i, c in enumerate(sorted_counts):
+        cumulative += (2 * (i + 1) - n - 1) * c
+    return cumulative / (n * total)
+
+
 def compute_emitter_spread(scheduler: Scheduler) -> float:
     """Return the standard deviation of emitter means across all emitters.
 

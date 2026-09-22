@@ -59,8 +59,9 @@ class Evaluator:
     decode : callable
         Function ``(n, latent_dim) -> list[str]`` that decodes latent
         vectors to SMILES.
-    ad : ADScorer
+    ad : ADScorer or None
         Applicability-domain scorer (distance to training set).
+        Required only when ``max_tanimoto`` is in archive dimensions.
     activity : callable
         Function ``(X, model) -> (preds, probs)`` that predicts from
         pre-featurized features (``predict_from_features``).
@@ -75,7 +76,7 @@ class Evaluator:
     def __init__(
         self,
         decode,
-        ad: ADScorer,
+        ad: ADScorer | None = None,
         activity=None,
         activity_model=None,
         featurizer=None,
@@ -195,11 +196,16 @@ class Evaluator:
         for dim_name in self._archive_cfg.active_dimension_names():
             if dim_name in SPECIAL_DIMENSIONS:
                 if dim_name == "max_tanimoto":
-                    fps, valid_mask = parsed.fingerprints
-                    max_tan = np.ones(len(valid_smiles), dtype=np.float32)
-                    if fps is not None and len(fps) > 0:
-                        max_tan[valid_mask] = self._ad.compute_max_tanimoto(fps)
-                    dim_scores["max_tanimoto"] = max_tan
+                    if self._ad is not None:
+                        fps, valid_mask = parsed.fingerprints
+                        max_tan = np.ones(len(valid_smiles), dtype=np.float32)
+                        if fps is not None and len(fps) > 0:
+                            max_tan[valid_mask] = self._ad.compute_max_tanimoto(fps)
+                        dim_scores["max_tanimoto"] = max_tan
+                    else:
+                        dim_scores["max_tanimoto"] = np.zeros(
+                            len(valid_smiles), dtype=np.float32
+                        )
                 continue
 
             use_scaffold = dim_configs[dim_name].scaffold

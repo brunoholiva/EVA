@@ -54,10 +54,8 @@ class GenerativeConfig:
 
 @dataclass
 class ADConfig:
-    ad_model_path: str
-    n_neighbors: int
-    n_bits: int
-    radius: int
+    ad_model_path: str = ""
+    n_neighbors: int = 5
 
 
 @dataclass
@@ -95,6 +93,7 @@ class TensorBoardConfig:
     histogram_every: int = 10
     figure_every: int = 25
     molecule_every: int = 10
+    coverage_every: int = 1000
 
 
 @dataclass
@@ -102,12 +101,12 @@ class ExperimentConfig:
     archive: ArchiveConfig
     emitter: EmitterConfig
     generative: GenerativeConfig
-    ad: ADConfig
     activity: ActivityConfig
     run: RunConfig
     output: OutputConfig
     pca: PCALatentConfig = field(default_factory=PCALatentConfig)
     tensorboard: TensorBoardConfig = field(default_factory=TensorBoardConfig)
+    ad: ADConfig | None = None
 
     @classmethod
     def from_toml(cls, file_path: str) -> ExperimentConfig:
@@ -139,11 +138,11 @@ class ExperimentConfig:
             archive=archive,
             emitter=EmitterConfig(**raw.get("emitter", {})),
             generative=GenerativeConfig(**raw.get("generative", {})),
-            ad=ADConfig(**raw.get("ad", {})),
             activity=ActivityConfig(**raw.get("activity", {})),
             run=RunConfig(**raw.get("run", {})),
             output=OutputConfig(**raw.get("output", output_defaults)),
             pca=PCALatentConfig(**raw.get("pca", {})),
             tensorboard=TensorBoardConfig(**raw.get("tensorboard", {})),
+            ad=ADConfig(**raw["ad"]) if "ad" in raw else None,
         )
         return config

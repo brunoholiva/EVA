@@ -30,12 +30,6 @@ device = "cuda"
 latent_dim = 256
 seed = 42
 
-[ad]
-ad_model_path = "data/predictor/ad_model_actives.joblib"
-n_neighbors = 5
-n_bits = 2048
-radius = 2
-
 [activity]
 model_path = "data/predictor/tabpfn_model.joblib"
 device = "cuda"
@@ -46,14 +40,14 @@ path = "data/pca_latent.joblib"
 enabled = true
 
 [run]
-n_generations = 250
+n_generations = 40
 eval_every = 20
 seed = 42
 resume_from = ""
 
 [output]
 output_dir = "results"
-run_name = "run1"
+run_name = "test"
 
 [tensorboard]
 enabled = true

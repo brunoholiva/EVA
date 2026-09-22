@@ -164,6 +164,7 @@ class CMAMAELoop:
         self.last_emitter_insertions: list[dict] | None = None
         self.last_emitter_spread: float | None = None
         self._threshold_min = threshold_min
+        self._emitter_totals: list[int] | None = None
 
     @property
     def archive(self) -> GridArchive:
@@ -189,6 +190,24 @@ class CMAMAELoop:
     def result_real_objectives(self) -> dict[int, float]:
         """Real P(active) values for solutions in the result archive (uncapped)."""
         return self._tracker.result
+
+    @property
+    def emitter_insertion_totals(self) -> list[int]:
+        """Cumulative per-emitter insertions (new + improved) for the run."""
+        return list(self._emitter_totals) if self._emitter_totals else []
+
+    def _accumulate_emitter_insertions(self, insertions: list[dict] | None) -> None:
+        """Accumulate per-emitter insertion totals across generations."""
+        if insertions is None:
+            return
+        if self._emitter_totals is None:
+            self._emitter_totals = [0] * len(insertions)
+        for entry in insertions:
+            em_id = entry["id"]
+            if em_id < len(self._emitter_totals):
+                self._emitter_totals[em_id] += (
+                    entry["inserted_new"] + entry["improved_existing"]
+                )
 
     def run(
         self,
@@ -260,6 +279,7 @@ class CMAMAELoop:
                 self._scheduler,
             )
             self.last_emitter_spread = compute_emitter_spread(self._scheduler)
+            self._accumulate_emitter_insertions(self.last_emitter_insertions)
 
             if result.timings is not None:
                 result.timings.archive_ops = time.time() - t_archive_start
