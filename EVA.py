@@ -22,7 +22,7 @@ from reporting.reporting import print_generation, print_results
 from reporting.plotting import visualize_archive
 from evaluation.activity import load_model as load_tabpfn
 from evaluation.activity import predict_from_features
-from evaluation.max_tanimoto import MaxTanimotoScorer
+from evaluation.dimensions import load_dimension_resources
 
 
 def _parse_args(argv: list[str] | None) -> tuple[str, str | None]:
@@ -60,19 +60,9 @@ def _load_vae(cfg: ExperimentConfig) -> ChemBedVAE | ProjectedVAE:
     return vae
 
 
-def _load_scorers(cfg: ExperimentConfig):
-    """Load TabPFN, featurizer, and the optional max-Tanimoto scorer."""
-    step("Loading scorers")
-    dim_names = cfg.archive.active_dimension_names()
-    if "max_tanimoto" in dim_names:
-        if cfg.max_tanimoto is None:
-            raise ValueError(
-                "max_tanimoto is configured as an archive dimension, "
-                "but [max_tanimoto] is missing"
-            )
-        max_tanimoto = MaxTanimotoScorer(cfg.max_tanimoto.model_path)
-    else:
-        max_tanimoto = None
+def _load_activity_oracle(cfg: ExperimentConfig):
+    """Load the activity model and its matching feature transformer."""
+    step("Loading activity oracle")
     tabpfn = load_tabpfn(
         path=cfg.activity.model_path,
         device=cfg.activity.device,
@@ -81,7 +71,7 @@ def _load_scorers(cfg: ExperimentConfig):
     featurizer = make_activity_featurizer(
         cfg.activity.representation, device=cfg.activity.device
     )
-    return max_tanimoto, tabpfn, featurizer
+    return tabpfn, featurizer
 
 
 def _run_loop(
@@ -262,12 +252,15 @@ def main(argv: list[str | None] | None = None) -> None:
     tb_logger = TensorBoardLogger(cfg.tensorboard, output_dir)
     tb_logger.log_config(cfg)
 
+    dimension_resources = load_dimension_resources(
+        cfg.archive.active_dimension_names(), cfg.max_tanimoto
+    )
     vae = _load_vae(cfg)
-    max_tanimoto, tabpfn, featurizer = _load_scorers(cfg)
+    tabpfn, featurizer = _load_activity_oracle(cfg)
 
     evaluator = Evaluator(
         decode=vae.decode,
-        max_tanimoto=max_tanimoto,
+        dimension_resources=dimension_resources,
         activity=predict_from_features,
         activity_model=tabpfn,
         featurizer=featurizer,

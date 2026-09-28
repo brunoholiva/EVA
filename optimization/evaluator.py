@@ -20,7 +20,7 @@ MAX_SELFIES_TOKENS = 200
 
 if TYPE_CHECKING:
     from config import ArchiveConfig
-    from evaluation.max_tanimoto import MaxTanimotoScorer
+    from evaluation.dimensions import DimensionResources
 
 
 @dataclass
@@ -57,9 +57,8 @@ class Evaluator:
     decode : callable
         Function ``(n, latent_dim) -> list[str]`` that decodes latent
         vectors to SMILES.
-    max_tanimoto : MaxTanimotoScorer or None
-        Max-Tanimoto scorer against the reference molecules. Required only
-        when ``max_tanimoto`` is in archive dimensions.
+    dimension_resources : DimensionResources or None
+        Resources required by configured archive dimensions.
     activity : callable
         Function ``(X, model) -> (preds, probs)`` that predicts from
         pre-featurized features (``predict_from_features``).
@@ -74,14 +73,14 @@ class Evaluator:
     def __init__(
         self,
         decode,
-        max_tanimoto: MaxTanimotoScorer | None = None,
+        dimension_resources: DimensionResources | None = None,
         activity=None,
         activity_model=None,
         featurizer=None,
         archive_cfg: ArchiveConfig | None = None,
     ) -> None:
         self._decode_fn = decode
-        self._max_tanimoto = max_tanimoto
+        self._dimension_resources = dimension_resources
         self._activity_fn = activity
         self._activity_model = activity_model
         self._featurizer = featurizer
@@ -202,7 +201,7 @@ class Evaluator:
                 compute_parsed = parsed
 
             dim_scores[dim_name] = compute_dimension(
-                dim_name, compute_parsed, self._max_tanimoto
+                dim_name, compute_parsed, self._dimension_resources
             )
 
         return dim_scores
