@@ -40,8 +40,11 @@ class EmitterConfig:
     sigma0: float
     batch_size: int
     n_emitters: int
-    restart_mode: str = "hybrid"
-    random_restart_prob: float = 0.3
+    # int  -> restart every N generations (deterministic drift control).
+    # "basic" / "no_improvement" -> pyribs rules; note "basic" only fires on
+    # CMA-ES convergence (cond > 1e14, sigma*sqrt(max_eig) < 1e-11, or flat
+    # rankings), which in practice means it never restarts.
+    restart_rule: int | str = "basic"
 
 
 @dataclass
@@ -63,6 +66,7 @@ class ActivityConfig:
     model_path: str
     device: str
     softmax_temperature: float
+    representation: str = "rdkit2d"
 
 
 @dataclass

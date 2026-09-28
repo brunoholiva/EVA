@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import selfies as sf
-import torch
 from joblib import Parallel, delayed
 from rdkit import Chem
 
@@ -158,10 +157,8 @@ class Evaluator:
         with ThreadPoolExecutor(max_workers=1) as pool:
             cpu_future = pool.submit(self._compute_cpu_scores, valid_smiles)
 
-            raw_logits = self._activity_model.predict_raw_logits(X)
-            probs = torch.softmax(torch.from_numpy(raw_logits), dim=-1).numpy()
-            p_per_est = probs[:, :, 1]
-            pa = p_per_est.mean(axis=0).astype(np.float64)
+            _, probs = self._activity_fn(X, self._activity_model)
+            pa = probs[:, 1].astype(np.float64)
 
             dim_scores = cpu_future.result()
 

@@ -14,9 +14,10 @@ dependencies:
 
   - pip:
       - torch
-      - tabpfn==8.0.8
+      - tabpfn
       - lightning
       - descriptastorus
+      - chemprop==2.2.3
       - selfies
       - setuptools<82
       - aizynthfinder

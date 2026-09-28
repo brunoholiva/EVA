@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from config import ExperimentConfig
-from chemistry.features import MoleculeFeaturizer
+from chemistry.features import make_activity_featurizer
 from generative import ChemBedVAE, ProjectedVAE
 from optimization import Evaluator, TensorBoardLogger, build_scheduler
 from optimization.constants import INVALID_MOLECULE_OBJECTIVE
@@ -76,7 +76,9 @@ def _load_scorers(cfg: ExperimentConfig):
         device=cfg.activity.device,
         softmax_temperature=cfg.activity.softmax_temperature,
     )
-    featurizer = MoleculeFeaturizer()
+    featurizer = make_activity_featurizer(
+        cfg.activity.representation, device=cfg.activity.device
+    )
     return ad, tabpfn, featurizer
 
 
