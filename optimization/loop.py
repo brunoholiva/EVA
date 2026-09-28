@@ -26,48 +26,6 @@ GenerationCallback = Callable[[int, EvalResult, GridArchive], None]
 StepCallback = Callable[[int, EvalResult, GridArchive], None]
 
 
-class _SafeEvolutionStrategyEmitter(EvolutionStrategyEmitter):
-    """EvolutionStrategyEmitter with hybrid restart and empty-archive guard.
-
-    Replaces pyribs' default restart path with a configurable strategy:
-    - ``"elite"``: restart from archive sample_elites (pyribs default)
-    - ``"random"``: restart from fresh Gaussian N(0, 1)
-    - ``"hybrid"``: with probability ``random_restart_prob``, random; else elite
-
-    Also guards against empty-archive ``IndexError``.
-    """
-
-    def __init__(self, *args, restart_mode="hybrid", random_restart_prob=0.3, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._restart_mode = restart_mode
-        self._random_restart_prob = random_restart_prob
-        self._restart_rng = np.random.default_rng(
-            np.random.SeedSequence(kwargs.get("seed", 0)).spawn(1)[0]
-        )
-
-    def _sample_restart_x0(self):
-        """Choose a new x0 based on restart mode."""
-        if len(self.archive) == 0:
-            return self._restart_rng.standard_normal(self._solution_dim)
-
-        if self._restart_mode == "random":
-            return self._restart_rng.standard_normal(self._solution_dim)
-        if self._restart_mode == "elite":
-            return self.archive.sample_elites(1)["solution"][0]
-        if self._restart_rng.random() < self._random_restart_prob:
-            return self._restart_rng.standard_normal(self._solution_dim)
-        return self.archive.sample_elites(1)["solution"][0]
-
-    def tell(self, solution, objective, measures, add_info=(), **fields):
-        try:
-            super().tell(solution, objective, measures, add_info=add_info, **fields)
-        except IndexError:
-            new_x0 = self._sample_restart_x0()
-            self._opt.reset(new_x0)
-            self._ranker.reset(self, self.archive)
-            self._restarts += 1
-
-
 def build_scheduler(
     archive_cfg: ArchiveConfig,
     emitter_cfg: EmitterConfig,
@@ -80,7 +38,7 @@ def build_scheduler(
     archive_cfg : ArchiveConfig
         Archive dimensions, ranges, and learning rate.
     emitter_cfg : EmitterConfig
-        Emitter sigma, batch size, and count.
+        Emitter sigma, batch size, count, and restart rule.
     seed : int
         Random seed for reproducibility.
 
@@ -116,19 +74,17 @@ def build_scheduler(
         rng = np.random.default_rng(seed + i)
         x0 = rng.standard_normal(archive_cfg.solution_dim).astype(np.float64)
 
-        emitter = _SafeEvolutionStrategyEmitter(
+        emitter = EvolutionStrategyEmitter(
             archive=archive,
             ranker="imp",
             es="cma_es",
             selection_rule="mu",
-            restart_rule="no_improvement",
+            restart_rule=emitter_cfg.restart_rule,
             x0=x0,
             sigma0=emitter_cfg.sigma0,
             bounds=None,
             batch_size=emitter_cfg.batch_size,
             seed=seed + i,
-            restart_mode=emitter_cfg.restart_mode,
-            random_restart_prob=emitter_cfg.random_restart_prob,
         )
         emitters.append(emitter)
 
