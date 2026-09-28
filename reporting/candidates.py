@@ -335,56 +335,6 @@ def score_cytotox(
     return result
 
 
-def score_ad(
-    df: pd.DataFrame,
-    ad_model_path: Path | str,
-    smiles_col: str = "smiles",
-    chunk_size: int = 2000,
-) -> pd.DataFrame:
-    """Compute applicability domain scores.
-
-    Parameters
-    ----------
-    df : DataFrame
-        Candidates.
-    ad_model_path : Path
-        Path to the kNN AD model joblib artifact.
-    smiles_col : str
-        Column with SMILES.
-    chunk_size : int
-        Number of query molecules per batch to avoid OOM on large sets.
-
-    Returns
-    -------
-    DataFrame
-        Candidates with added ``ad_score`` column.
-    """
-    from chemistry.fingerprint import smiles_to_morgan
-    from evaluation.applicability import ADScorer
-
-    step("Scoring applicability domain")
-    scorer = ADScorer(ad_model_path)
-
-    fps, _valid_idx = smiles_to_morgan(
-        df[smiles_col].tolist(),
-        radius=scorer.radius,
-        fp_size=scorer.n_bits,
-    )
-
-    valid_mask = fps.any(axis=1)
-    ad_scores = np.full(len(df), 1.0)
-    if valid_mask.any():
-        valid_indices = np.where(valid_mask)[0]
-        for start in range(0, len(valid_indices), chunk_size):
-            batch_idx = valid_indices[start : start + chunk_size]
-            ad_scores[batch_idx] = scorer.compute_from_fps(fps[batch_idx])
-
-    result = df.copy()
-    result["ad_score"] = ad_scores
-    step(f"  AD score mean: {np.mean(ad_scores):.3f}")
-    return result
-
-
 _AIZYNTH_CONFIG = "data/aizynth/config.yml"
 
 
@@ -751,7 +701,6 @@ def export_candidates_csv(df: pd.DataFrame, path: Path | str) -> Path:
 def run_pipeline(
     all_evaluations_path: Path | str,
     training_data_path: Path | str = "data/predictor/predictor_training_data.csv",
-    ad_model_path: Path | str = "data/predictor/ad_model.joblib",
     cytotox_models: dict[str, Path | str] | None = None,
     p_active_min: float = 0.6,
     device: str = "cuda",
@@ -759,7 +708,7 @@ def run_pipeline(
     """Run the full post-run candidate pipeline.
 
     Steps: load → activity filter → dedup → remove training → similarity →
-    cluster → cytotox → AD.
+    cluster → cytotox.
 
     Parameters
     ----------
@@ -767,8 +716,6 @@ def run_pipeline(
         Path to ``all_evaluations.csv``.
     training_data_path : Path or str
         Training data CSV with SMILES + target columns.
-    ad_model_path : Path or str
-        kNN AD model joblib path.
     cytotox_models : dict or None
         ``{suffix: model_path}`` for cytotox models.
     p_active_min : float
@@ -800,8 +747,6 @@ def run_pipeline(
     if cytotox_models:
         candidates = score_cytotox(candidates, cytotox_models, device=device)
 
-    candidates = score_ad(candidates, ad_model_path)
-
     higher = ["p_active"]
     lower = [c for c in candidates.columns if c.startswith("p_cytotox_")]
     weights = {"p_active": 4.0}
@@ -820,7 +765,6 @@ def run_full_report(
     output_dir: Path | str,
     run_name: str = "run",
     training_data_path: Path | str = "data/predictor/predictor_training_data.csv",
-    ad_model_path: Path | str = "data/predictor/ad_model.joblib",
     cytotox_models: dict[str, Path | str] | None = None,
     p_active_min: float = 0.6,
     retro_enabled: bool = False,
@@ -844,8 +788,6 @@ def run_full_report(
         Name of the run (used in report title).
     training_data_path : Path or str
         Training data CSV.
-    ad_model_path : Path or str
-        AD model path.
     cytotox_models : dict or None
         Cytotox model paths.
     p_active_min : float
@@ -878,7 +820,6 @@ def run_full_report(
     candidates = run_pipeline(
         all_evaluations_path,
         training_data_path=training_data_path,
-        ad_model_path=ad_model_path,
         cytotox_models=cytotox_models,
         p_active_min=p_active_min,
         device=device,

@@ -11,7 +11,6 @@ import selfies as sf
 from joblib import Parallel, delayed
 from rdkit import Chem
 
-from evaluation.dimensions import SPECIAL_DIMENSIONS
 from optimization.constants import INVALID_MOLECULE_OBJECTIVE
 from reporting.suppress import suppress_joblib_warnings
 
@@ -21,7 +20,7 @@ MAX_SELFIES_TOKENS = 200
 
 if TYPE_CHECKING:
     from config import ArchiveConfig
-    from evaluation.applicability import ADScorer
+    from evaluation.max_tanimoto import MaxTanimotoScorer
 
 
 @dataclass
@@ -58,9 +57,9 @@ class Evaluator:
     decode : callable
         Function ``(n, latent_dim) -> list[str]`` that decodes latent
         vectors to SMILES.
-    ad : ADScorer or None
-        Applicability-domain scorer (distance to training set).
-        Required only when ``max_tanimoto`` is in archive dimensions.
+    max_tanimoto : MaxTanimotoScorer or None
+        Max-Tanimoto scorer against the reference molecules. Required only
+        when ``max_tanimoto`` is in archive dimensions.
     activity : callable
         Function ``(X, model) -> (preds, probs)`` that predicts from
         pre-featurized features (``predict_from_features``).
@@ -75,14 +74,14 @@ class Evaluator:
     def __init__(
         self,
         decode,
-        ad: ADScorer | None = None,
+        max_tanimoto: MaxTanimotoScorer | None = None,
         activity=None,
         activity_model=None,
         featurizer=None,
         archive_cfg: ArchiveConfig | None = None,
     ) -> None:
         self._decode_fn = decode
-        self._ad = ad
+        self._max_tanimoto = max_tanimoto
         self._activity_fn = activity
         self._activity_model = activity_model
         self._featurizer = featurizer
@@ -170,7 +169,7 @@ class Evaluator:
         """Compute CPU-bound molecular scores for valid SMILES.
 
         Parses molecules once, then computes only the enabled dimensions.
-        Fingerprints are lazily computed only if needed (for max_tanimoto).
+        Fingerprints are lazily computed only if needed by max_tanimoto.
         Scaffold-based dimensions use Murcko scaffold SMILES instead.
 
         Parameters
@@ -191,20 +190,6 @@ class Evaluator:
 
         dim_scores = {}
         for dim_name in self._archive_cfg.active_dimension_names():
-            if dim_name in SPECIAL_DIMENSIONS:
-                if dim_name == "max_tanimoto":
-                    if self._ad is not None:
-                        fps, valid_mask = parsed.fingerprints
-                        max_tan = np.ones(len(valid_smiles), dtype=np.float32)
-                        if fps is not None and len(fps) > 0:
-                            max_tan[valid_mask] = self._ad.compute_max_tanimoto(fps)
-                        dim_scores["max_tanimoto"] = max_tan
-                    else:
-                        dim_scores["max_tanimoto"] = np.zeros(
-                            len(valid_smiles), dtype=np.float32
-                        )
-                continue
-
             use_scaffold = dim_configs[dim_name].scaffold
 
             if use_scaffold:
@@ -216,7 +201,9 @@ class Evaluator:
             else:
                 compute_parsed = parsed
 
-            dim_scores[dim_name] = compute_dimension(dim_name, compute_parsed)
+            dim_scores[dim_name] = compute_dimension(
+                dim_name, compute_parsed, self._max_tanimoto
+            )
 
         return dim_scores
 

@@ -21,8 +21,7 @@ scaffold = false
 sigma0 = 0.5
 batch_size = 32
 n_emitters = 16
-restart_mode = "hybrid"
-random_restart_prob = 0.5
+restart_rule = 100
 
 [generative]
 model_repo_id = "3BioCompBio/chembed-default"
@@ -31,23 +30,24 @@ latent_dim = 256
 seed = 42
 
 [activity]
-model_path = "data/predictor/tabpfn_model.joblib"
+model_path = "data/predictor/tabpfn_chemeleon.joblib"
 device = "cuda"
 softmax_temperature = 2.0
+representation = "chemeleon"
 
 [pca]
 path = "data/pca_latent.joblib"
-enabled = true
+enabled = false
 
 [run]
-n_generations = 40
+n_generations = 1000
 eval_every = 20
 seed = 42
 resume_from = ""
 
 [output]
 output_dir = "results"
-run_name = "test"
+run_name = "restart_every100_no_pca"
 
 [tensorboard]
 enabled = true

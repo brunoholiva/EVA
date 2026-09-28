@@ -22,7 +22,7 @@ from reporting.reporting import print_generation, print_results
 from reporting.plotting import visualize_archive
 from evaluation.activity import load_model as load_tabpfn
 from evaluation.activity import predict_from_features
-from evaluation.applicability import ADScorer
+from evaluation.max_tanimoto import MaxTanimotoScorer
 
 
 def _parse_args(argv: list[str] | None) -> tuple[str, str | None]:
@@ -61,16 +61,18 @@ def _load_vae(cfg: ExperimentConfig) -> ChemBedVAE | ProjectedVAE:
 
 
 def _load_scorers(cfg: ExperimentConfig):
-    """Load TabPFN and featurizer. Load AD scorer only if max_tanimoto is enabled."""
+    """Load TabPFN, featurizer, and the optional max-Tanimoto scorer."""
     step("Loading scorers")
     dim_names = cfg.archive.active_dimension_names()
-    if cfg.ad is not None and "max_tanimoto" in dim_names:
-        ad = ADScorer(
-            model_path=cfg.ad.ad_model_path,
-            n_neighbors=cfg.ad.n_neighbors,
-        )
+    if "max_tanimoto" in dim_names:
+        if cfg.max_tanimoto is None:
+            raise ValueError(
+                "max_tanimoto is configured as an archive dimension, "
+                "but [max_tanimoto] is missing"
+            )
+        max_tanimoto = MaxTanimotoScorer(cfg.max_tanimoto.model_path)
     else:
-        ad = None
+        max_tanimoto = None
     tabpfn = load_tabpfn(
         path=cfg.activity.model_path,
         device=cfg.activity.device,
@@ -79,7 +81,7 @@ def _load_scorers(cfg: ExperimentConfig):
     featurizer = make_activity_featurizer(
         cfg.activity.representation, device=cfg.activity.device
     )
-    return ad, tabpfn, featurizer
+    return max_tanimoto, tabpfn, featurizer
 
 
 def _run_loop(
@@ -261,11 +263,11 @@ def main(argv: list[str | None] | None = None) -> None:
     tb_logger.log_config(cfg)
 
     vae = _load_vae(cfg)
-    ad, tabpfn, featurizer = _load_scorers(cfg)
+    max_tanimoto, tabpfn, featurizer = _load_scorers(cfg)
 
     evaluator = Evaluator(
         decode=vae.decode,
-        ad=ad,
+        max_tanimoto=max_tanimoto,
         activity=predict_from_features,
         activity_model=tabpfn,
         featurizer=featurizer,

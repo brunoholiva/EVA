@@ -1,19 +1,18 @@
-"""Build the applicability domain kNN model from training SMILES.
+"""Build the max-Tanimoto reference model from training SMILES.
 
 Fits a sklearn NearestNeighbors (Jaccard distance) on Morgan fingerprints
 and saves the model + raw fingerprints as a joblib artifact.
 
 Usage::
 
-    python featurization/build_ad_model.py \\
+    python scripts/build_max_tanimoto_model.py \\
         --csv data/predictor/predictor_training_data.csv \\
-        --out data/predictor/ad_model.joblib
+        --out data/predictor/max_tanimoto_model.joblib
 """
 
 from __future__ import annotations
 
 import argparse
-import time
 from pathlib import Path
 
 import joblib
@@ -34,7 +33,6 @@ suppress_rdkit_logs()
 
 N_BITS_DEFAULT: int = 2048
 RADIUS_DEFAULT: int = 2
-N_NEIGHBORS_DEFAULT: int = 5
 
 
 def _smiles_to_fp(
@@ -70,11 +68,10 @@ def build_model(
     out_path: Path,
     radius: int,
     n_bits: int,
-    n_neighbors: int,
     target_col: str | None = None,
     target_val: int | str | None = None,
 ) -> None:
-    """Build and save the kNN applicability domain model.
+    """Build and save the reference fingerprint model.
 
     Parameters
     ----------
@@ -88,12 +85,9 @@ def build_model(
         Morgan fingerprint radius.
     n_bits : int
         Morgan fingerprint bit length.
-    n_neighbors : int
-        Number of nearest neighbors for the kNN model.
     target_col : str or None
         If given, filter the CSV to rows where this column equals
-        ``target_val`` before computing fingerprints. Used to fit the
-        AD model on a subset (e.g. actives only).
+        ``target_val`` before computing fingerprints.
     target_val : int or str or None
         Value to match in ``target_col``. Ignored if ``target_col`` is None.
     """
@@ -132,26 +126,16 @@ def build_model(
         f"Valid fingerprints: {len(fps):,}  |  Invalid SMILES skipped: {n_invalid:,}"
     )
 
-    from sklearn.neighbors import NearestNeighbors
-
-    t0 = time.perf_counter()
-    nn = NearestNeighbors(metric="jaccard", n_neighbors=n_neighbors)
-    nn.fit(fps_arr.astype(bool))
-    elapsed = time.perf_counter() - t0
-    detail(f"kNN fit ({n_neighbors} neighbors, Jaccard): {elapsed:.1f}s")
-
     out_path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(
         {
-            "nn": nn,
             "fps": fps_arr,
             "radius": radius,
             "n_bits": n_bits,
-            "n_neighbors": n_neighbors,
         },
         out_path,
     )
-    saved("AD model", out_path, f"{out_path.stat().st_size / 1e6:.1f} MB")
+    saved("Max-Tanimoto model", out_path, f"{out_path.stat().st_size / 1e6:.1f} MB")
 
 
 def main() -> None:
@@ -161,7 +145,6 @@ def main() -> None:
     parser.add_argument("--out", required=True, help="Output joblib path")
     parser.add_argument("--radius", type=int, default=RADIUS_DEFAULT)
     parser.add_argument("--n_bits", type=int, default=N_BITS_DEFAULT)
-    parser.add_argument("--n_neighbors", type=int, default=N_NEIGHBORS_DEFAULT)
     parser.add_argument(
         "--target_col",
         default=None,
@@ -184,7 +167,6 @@ def main() -> None:
         out_path=Path(args.out),
         radius=args.radius,
         n_bits=args.n_bits,
-        n_neighbors=args.n_neighbors,
         target_col=args.target_col,
         target_val=target_val_typed,
     )
