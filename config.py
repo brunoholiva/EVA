@@ -40,6 +40,7 @@ class EmitterConfig:
     sigma0: float
     batch_size: int
     n_emitters: int
+    bounds: float = 3.0
     # int  -> restart every N generations (deterministic drift control).
     # "basic" / "no_improvement" -> pyribs rules; note "basic" only fires on
     # CMA-ES convergence (cond > 1e14, sigma*sqrt(max_eig) < 1e-11, or flat
