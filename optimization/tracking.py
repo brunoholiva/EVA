@@ -84,7 +84,7 @@ def compute_insertion_stats(
 
 
 def compute_emitter_stats(scheduler: Scheduler) -> list[dict]:
-    """Return per-emitter distance from origin and restart count.
+    """Return per-emitter mean norm and restart count.
 
     Parameters
     ----------
@@ -94,18 +94,18 @@ def compute_emitter_stats(scheduler: Scheduler) -> list[dict]:
     Returns
     -------
     list of dict
-        Each dict has keys ``"id"``, ``"distance"``, ``"restarts"``.
+        Each dict has keys ``"id"``, ``"mean_norm"``, ``"restarts"``.
     """
     stats = []
     for i, emitter in enumerate(scheduler._emitters):
         if hasattr(emitter, "_opt"):
-            dist = np.linalg.norm(emitter._opt.mean - emitter.x0)
+            mean_norm = np.linalg.norm(emitter._opt.mean)
         else:
-            dist = 0.0
+            mean_norm = 0.0
         stats.append(
             {
                 "id": i,
-                "distance": float(dist),
+                "mean_norm": float(mean_norm),
                 "restarts": getattr(emitter, "restarts", 0),
             }
         )

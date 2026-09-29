@@ -292,11 +292,11 @@ class TensorBoardLogger:
         self._writer.add_scalar("insertion/rejected", stats["rejected"], step)
 
     def _log_emitter_stats(self, stats: list[dict], step: int) -> None:
-        """Log per-emitter statistics (distance, restarts)."""
+        """Log per-emitter statistics (mean norm, restarts)."""
         for es in stats:
             i = es["id"]
             self._writer.add_scalar(
-                f"emitter/{i}/distance", float(es["distance"]), step
+                f"emitter/{i}/mean_norm", float(es["mean_norm"]), step
             )
             self._writer.add_scalar(f"emitter/{i}/restarts", int(es["restarts"]), step)
 
