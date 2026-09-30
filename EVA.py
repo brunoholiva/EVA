@@ -5,24 +5,21 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
+from chemistry.featurizers import make_activity_featurizer
 from config import ExperimentConfig
-from chemistry.features import make_activity_featurizer
-from generative import ChemBedVAE, ProjectedVAE
-from optimization import Evaluator, TensorBoardLogger, build_scheduler
-from optimization.constants import INVALID_MOLECULE_OBJECTIVE
-from optimization.loop import CMAMAELoop
-from optimization.tracking import concentration_gini
-from chemistry.scaffolds import cluster_by_generic_scaffold
-from reporting.console import detail, make_progress_bar, section, step
-from reporting.persistence import load_scheduler, save_archive, save_scheduler
-from reporting.reporting import print_generation, print_results
-from reporting.plotting import visualize_archive
+from evaluation import INVALID_MOLECULE_OBJECTIVE, Evaluator
 from evaluation.activity import load_model as load_tabpfn
 from evaluation.activity import predict_from_features
-from evaluation.dimensions import load_dimension_resources
+from generative import ChemBedVAE, ProjectedVAE
+from optimization import TensorBoardLogger, build_scheduler
+from optimization.archive_metrics import final_archive_metrics
+from optimization.loop import CMAMAELoop
+from reporting.console import detail, make_progress_bar, section, step
+from reporting.persistence import load_scheduler, save_archive, save_scheduler
+from reporting.plotting import visualize_archive
+from reporting.tables import print_generation, print_results
 
 
 def _parse_args(argv: list[str] | None) -> tuple[str, str | None]:
@@ -152,9 +149,7 @@ def _run_loop(
                     all_evals.append((eval_num, "", float("nan"), False, gen))
             eval_counter[0] += len(result.smiles)
 
-            report_archive = (
-                loop.result_archive if loop.result_archive is not None else archive
-            )
+            report_archive = loop.report_archive
             stats = report_archive.stats
             n_valid = int(result.n_valid)
             oracle_counter[0] += n_valid
@@ -232,11 +227,7 @@ def _save_results(
             real_objectives=loop.result_real_objectives,
         )
     save_scheduler(loop.scheduler, output_dir)
-    visualize_archive(
-        loop.result_archive if loop.result_archive is not None else loop.archive,
-        output_dir,
-        dimension_names=dimension_names,
-    )
+    visualize_archive(loop.report_archive, output_dir, dimension_names=dimension_names)
 
 
 def main(argv: list[str | None] | None = None) -> None:
@@ -252,15 +243,11 @@ def main(argv: list[str | None] | None = None) -> None:
     tb_logger = TensorBoardLogger(cfg.tensorboard, output_dir)
     tb_logger.log_config(cfg)
 
-    dimension_resources = load_dimension_resources(
-        cfg.archive.active_dimension_names(), cfg.max_tanimoto
-    )
     vae = _load_vae(cfg)
     tabpfn, featurizer = _load_activity_oracle(cfg)
 
     evaluator = Evaluator(
         decode=vae.decode,
-        dimension_resources=dimension_resources,
         activity=predict_from_features,
         activity_model=tabpfn,
         featurizer=featurizer,
@@ -311,38 +298,31 @@ def main(argv: list[str | None] | None = None) -> None:
             cfg.archive.active_dimension_names(),
         )
 
-        report_archive = (
-            loop.result_archive if loop.result_archive is not None else loop.archive
-        )
+        report_archive = loop.report_archive
         if len(report_archive) > 0:
-            arch_data = report_archive.data()
-            smiles = vae.decode(arch_data["solution"])
-            clusters = cluster_by_generic_scaffold(smiles)
-            n_unique = len(clusters)
-            largest_frac = (
-                max(len(c) for c in clusters) / len(smiles) if smiles else 0.0
+            metrics = final_archive_metrics(
+                report_archive,
+                vae.decode,
+                (
+                    loop.result_real_objectives
+                    if loop.result_archive is not None
+                    else loop.real_objectives
+                ),
+                loop.emitter_insertion_totals,
             )
-            gini = concentration_gini(loop.emitter_insertion_totals)
-            real_objs = (
-                loop.result_real_objectives
-                if loop.result_archive is not None
-                else loop.real_objectives
-            )
-            real_values = list(real_objs.values())
-            if real_values:
-                real_arr = np.array(real_values)
-                fraction_above = float((real_arr > 0.6).mean())
-                best_obj = float(real_arr.max())
-            else:
-                fraction_above = 0.0
-                best_obj = 0.0
             tb_logger.log_archive_metrics(
-                n_unique, largest_frac, gini, fraction_above, best_obj
+                metrics.scaffold_n_unique,
+                metrics.scaffold_largest_frac,
+                metrics.emitter_gini,
+                metrics.fraction_above_0_6,
+                metrics.best_objective,
             )
             detail(
-                f"Scaffolds: {n_unique} unique, largest {largest_frac:.1%} | "
-                f"Emitter Gini: {gini:.3f} | "
-                f"Frac>0.6: {fraction_above:.1%} | Best P(active): {best_obj:.4f}"
+                f"Scaffolds: {metrics.scaffold_n_unique} unique, "
+                f"largest {metrics.scaffold_largest_frac:.1%} | "
+                f"Emitter Gini: {metrics.emitter_gini:.3f} | "
+                f"Frac>0.6: {metrics.fraction_above_0_6:.1%} | "
+                f"Best P(active): {metrics.best_objective:.4f}"
             )
     finally:
         tb_logger.close()
