@@ -1,22 +1,30 @@
-"""Parsed molecules with lazy fingerprint computation."""
+"""Parsed molecules shared across the scoring pipeline."""
 
 from __future__ import annotations
 
-import numpy as np
 from rdkit import Chem
 from rdkit.Chem.Scaffolds import MurckoScaffold
 
-from chemistry.fingerprint import mols_to_morgan
 from reporting.suppress import suppress_rdkit_logs
 
 suppress_rdkit_logs()
 
 
-class ParsedMolecules:
-    """Shared parsed molecules with lazy fingerprint computation.
+def _scaffold_smiles(mol: Chem.Mol | None) -> str | None:
+    """Return the Murcko scaffold SMILES for *mol*, or None."""
+    if mol is None:
+        return None
+    try:
+        scaffold = MurckoScaffold.GetScaffoldForMol(mol)
+        if scaffold is None or scaffold.GetNumHeavyAtoms() == 0:
+            return None
+        return Chem.MolToSmiles(scaffold)
+    except Exception:
+        return None
 
-    Parses SMILES once and caches the resulting Mol objects. Fingerprints
-    are computed lazily on first access to avoid unnecessary computation.
+
+class ParsedMolecules:
+    """SMILES parsed once, with lazily computed Murcko scaffolds.
 
     Parameters
     ----------
@@ -27,25 +35,7 @@ class ParsedMolecules:
     def __init__(self, smiles: list[str]):
         self.smiles = smiles
         self.mols = [Chem.MolFromSmiles(s) if s else None for s in smiles]
-        self._fingerprints: np.ndarray | None = None
-        self._valid_fp_mask: np.ndarray | None = None
         self._scaffold_smiles: list[str | None] | None = None
-
-    @property
-    def fingerprints(self) -> tuple[np.ndarray | None, np.ndarray | None]:
-        """Lazy-computed Morgan fingerprints.
-
-        Returns
-        -------
-        tuple[np.ndarray | None, np.ndarray | None]
-            Tuple of (fingerprints, valid_mask). Fingerprints is None if
-            no valid molecules. Valid mask indicates which SMILES produced
-            valid fingerprints.
-        """
-        if self._fingerprints is None:
-            self._fingerprints, self._valid_fp_mask = mols_to_morgan(self.mols)
-
-        return self._fingerprints, self._valid_fp_mask
 
     @property
     def scaffold_smiles(self) -> list[str | None]:
@@ -54,22 +44,9 @@ class ParsedMolecules:
         Returns
         -------
         list[str | None]
-            Murcko scaffold SMILES for each molecule. None for invalid
-            molecules or those without a scaffold (acyclic).
+            Murcko scaffold SMILES per molecule. None for invalid molecules
+            or those without a scaffold (acyclic).
         """
         if self._scaffold_smiles is None:
-            self._scaffold_smiles = []
-            for mol in self.mols:
-                if mol is None:
-                    self._scaffold_smiles.append(None)
-                else:
-                    try:
-                        scaffold = MurckoScaffold.GetScaffoldForMol(mol)
-                        if scaffold is None or scaffold.GetNumHeavyAtoms() == 0:
-                            self._scaffold_smiles.append(None)
-                        else:
-                            self._scaffold_smiles.append(Chem.MolToSmiles(scaffold))
-                    except Exception:
-                        self._scaffold_smiles.append(None)
-
+            self._scaffold_smiles = [_scaffold_smiles(mol) for mol in self.mols]
         return self._scaffold_smiles

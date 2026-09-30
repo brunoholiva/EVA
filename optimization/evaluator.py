@@ -20,7 +20,6 @@ MAX_SELFIES_TOKENS = 200
 
 if TYPE_CHECKING:
     from config import ArchiveConfig
-    from evaluation.dimensions import DimensionResources
 
 
 @dataclass
@@ -57,8 +56,6 @@ class Evaluator:
     decode : callable
         Function ``(n, latent_dim) -> list[str]`` that decodes latent
         vectors to SMILES.
-    dimension_resources : DimensionResources or None
-        Resources required by configured archive dimensions.
     activity : callable
         Function ``(X, model) -> (preds, probs)`` that predicts from
         pre-featurized features (``predict_from_features``).
@@ -73,14 +70,12 @@ class Evaluator:
     def __init__(
         self,
         decode,
-        dimension_resources: DimensionResources | None = None,
         activity=None,
         activity_model=None,
         featurizer=None,
         archive_cfg: ArchiveConfig | None = None,
     ) -> None:
         self._decode_fn = decode
-        self._dimension_resources = dimension_resources
         self._activity_fn = activity
         self._activity_model = activity_model
         self._featurizer = featurizer
@@ -200,9 +195,7 @@ class Evaluator:
             else:
                 compute_parsed = parsed
 
-            dim_scores[dim_name] = compute_dimension(
-                dim_name, compute_parsed, self._dimension_resources
-            )
+            dim_scores[dim_name] = compute_dimension(dim_name, compute_parsed)
 
         return dim_scores
 

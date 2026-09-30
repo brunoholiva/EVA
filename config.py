@@ -56,11 +56,6 @@ class GenerativeConfig:
 
 
 @dataclass
-class MaxTanimotoConfig:
-    model_path: str = ""
-
-
-@dataclass
 class ActivityConfig:
     model_path: str
     device: str
@@ -109,7 +104,6 @@ class ExperimentConfig:
     output: OutputConfig
     pca: PCALatentConfig = field(default_factory=PCALatentConfig)
     tensorboard: TensorBoardConfig = field(default_factory=TensorBoardConfig)
-    max_tanimoto: MaxTanimotoConfig | None = None
 
     @classmethod
     def from_toml(cls, file_path: str) -> ExperimentConfig:
@@ -146,10 +140,5 @@ class ExperimentConfig:
             output=OutputConfig(**raw.get("output", output_defaults)),
             pca=PCALatentConfig(**raw.get("pca", {})),
             tensorboard=TensorBoardConfig(**raw.get("tensorboard", {})),
-            max_tanimoto=(
-                MaxTanimotoConfig(**raw["max_tanimoto"])
-                if "max_tanimoto" in raw
-                else None
-            ),
         )
         return config
