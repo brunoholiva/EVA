@@ -1,3 +1,5 @@
+"""Configuration dataclasses for EVA parameters."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -17,6 +19,8 @@ class DimensionConfig:
 
 @dataclass
 class ArchiveConfig:
+    """Configuration for the pyribs archive."""
+
     solution_dim: int
     dimensions: list[DimensionConfig]
     learning_rate: float
@@ -37,6 +41,8 @@ class ArchiveConfig:
 
 @dataclass
 class EmitterConfig:
+    """Configuration for the emitters."""
+
     sigma0: float
     batch_size: int
     n_emitters: int
@@ -49,6 +55,8 @@ class EmitterConfig:
 
 @dataclass
 class GenerativeConfig:
+    """Configuration for the generative model."""
+
     model_repo_id: str
     device: str
     latent_dim: int
@@ -57,6 +65,8 @@ class GenerativeConfig:
 
 @dataclass
 class ActivityConfig:
+    """Configuration for the activity model."""
+
     model_path: str
     device: str
     softmax_temperature: float
@@ -65,6 +75,8 @@ class ActivityConfig:
 
 @dataclass
 class RunConfig:
+    """Configuration for the run parameters."""
+
     n_generations: int
     eval_every: int
     seed: int
@@ -73,18 +85,24 @@ class RunConfig:
 
 @dataclass
 class OutputConfig:
+    """Configuration for the output parameters."""
+
     output_dir: str
     run_name: str
 
 
 @dataclass
 class PCALatentConfig:
+    """Configuration for PCA vector reduction."""
+
     path: str = "data/pca_latent.joblib"
     enabled: bool = True
 
 
 @dataclass
 class TensorBoardConfig:
+    """Configuration for TensorBoard logging."""
+
     enabled: bool = False
     log_dir: str = "tensorboard"
     scalar_every: int = 1
@@ -96,6 +114,8 @@ class TensorBoardConfig:
 
 @dataclass
 class ExperimentConfig:
+    """Configuration for an entire experiment."""
+
     archive: ArchiveConfig
     emitter: EmitterConfig
     generative: GenerativeConfig

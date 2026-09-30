@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import numpy as np
+import selfies as sf
+from joblib import Parallel, delayed
 from rdkit import Chem
 
 from logs import suppress_rdkit_logs
-import selfies as sf
-import numpy as np
-from joblib import Parallel, delayed
 
 suppress_rdkit_logs()
 

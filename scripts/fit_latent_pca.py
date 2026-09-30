@@ -22,8 +22,8 @@ from sklearn.decomposition import PCA
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from generative import ChemBedVAE
 from chemistry.smiles import canonicalize_batch
+from generative import ChemBedVAE
 from reporting.console import console, detail, saved, section, step
 
 TRAINING_DATA = "data/predictor/predictor_training_data.csv"
