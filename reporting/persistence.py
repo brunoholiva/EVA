@@ -11,7 +11,7 @@ from ribs.archives import GridArchive
 from ribs.schedulers import Scheduler
 
 from reporting.console import loaded, saved
-from reporting.reporting import _rank_archive
+from chemistry.tables import _rank_archive
 
 
 def save_archive(
