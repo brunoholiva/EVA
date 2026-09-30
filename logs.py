@@ -1,4 +1,4 @@
-"""Warning and logging suppression utilities."""
+"""Process-wide logging suppression (joblib workers, RDKit)."""
 
 from __future__ import annotations
 

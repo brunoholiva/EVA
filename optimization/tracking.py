@@ -32,6 +32,60 @@ def occupied_cells(archive: GridArchive) -> dict[int, float]:
     return cells
 
 
+def _count_insertions(
+    acceptable: np.ndarray,
+    cell_indices: np.ndarray,
+    objectives: np.ndarray,
+    old_occupied: dict[int, float],
+    index_ranges: list[tuple[int, int]],
+) -> list[dict[str, int]]:
+    """Count insertion outcomes per index range.
+
+    Parameters
+    ----------
+    acceptable : np.ndarray of shape ``(n,)``
+        Candidates that are valid and within archive bounds.
+    cell_indices : np.ndarray of shape ``(n,)``
+        Archive cell index for each candidate.
+    objectives : np.ndarray of shape ``(n,)``
+        Thresholded objectives.
+    old_occupied : dict of int to float
+        Cell-index -> objective snapshot taken before ``tell``.
+    index_ranges : list of (start, end) pairs
+        Candidate index ranges to summarise, one dict per range.
+
+    Returns
+    -------
+    list of dict of str to int
+        Counts keyed ``"inserted_new"``, ``"improved_existing"``,
+        ``"rejected"``, one dict per input range.
+    """
+    counts: list[dict[str, int]] = []
+    for start, end in index_ranges:
+        inserted_new = 0
+        improved_existing = 0
+        rejected = 0
+        for i in range(start, min(end, len(objectives))):
+            if not acceptable[i]:
+                rejected += 1
+                continue
+            cell_idx = int(cell_indices[i])
+            if cell_idx not in old_occupied:
+                inserted_new += 1
+            elif objectives[i] > old_occupied[cell_idx]:
+                improved_existing += 1
+            else:
+                rejected += 1
+        counts.append(
+            {
+                "inserted_new": inserted_new,
+                "improved_existing": improved_existing,
+                "rejected": rejected,
+            }
+        )
+    return counts
+
+
 def compute_insertion_stats(
     result: EvalResult,
     objectives: np.ndarray,
@@ -58,29 +112,11 @@ def compute_insertion_stats(
         ``"rejected"``.
     """
     acceptable = _acceptable_mask(result.measures, objectives, archive)
-    all_indices = archive.index_of(result.measures)
-
-    inserted_new = 0
-    improved_existing = 0
-    rejected = 0
-
-    for i in range(len(objectives)):
-        if not acceptable[i]:
-            rejected += 1
-            continue
-        cell_idx = int(all_indices[i])
-        if cell_idx not in old_occupied:
-            inserted_new += 1
-        elif objectives[i] > old_occupied[cell_idx]:
-            improved_existing += 1
-        else:
-            rejected += 1
-
-    return {
-        "inserted_new": inserted_new,
-        "improved_existing": improved_existing,
-        "rejected": rejected,
-    }
+    cell_indices = archive.index_of(result.measures)
+    (stats,) = _count_insertions(
+        acceptable, cell_indices, objectives, old_occupied, [(0, len(objectives))]
+    )
+    return stats
 
 
 def compute_emitter_stats(scheduler: Scheduler) -> list[dict]:
@@ -110,6 +146,53 @@ def compute_emitter_stats(scheduler: Scheduler) -> list[dict]:
             }
         )
     return stats
+
+
+def compute_emitter_insertions(
+    result: EvalResult,
+    objectives: np.ndarray,
+    old_occupied: dict[int, float],
+    archive: GridArchive,
+    scheduler: Scheduler,
+) -> list[dict]:
+    """Attribute archive insertions to the emitters that produced them.
+
+    Uses ``scheduler._num_emitted`` to determine which emitter produced
+    each solution in the batch (solutions are contiguous per emitter).
+
+    Parameters
+    ----------
+    result : EvalResult
+        Scoring results for this generation.
+    objectives : np.ndarray
+        Thresholded/capped objectives passed to ``scheduler.tell``.
+    old_occupied : dict of int to float
+        Cell-index to objective snapshot taken *before* ``tell``.
+    archive : GridArchive
+        The archive insertion was performed into.
+    scheduler : Scheduler
+        The pyribs scheduler (provides emitter boundaries via
+        ``_num_emitted``).
+
+    Returns
+    -------
+    list of dict
+        Each dict has keys ``"id"``, ``"inserted_new"``,
+        ``"improved_existing"``, ``"rejected"``.
+    """
+    acceptable = _acceptable_mask(result.measures, objectives, archive)
+    cell_indices = archive.index_of(result.measures)
+
+    boundaries: list[tuple[int, int]] = []
+    pos = 0
+    for n in scheduler._num_emitted:
+        boundaries.append((pos, pos + n))
+        pos += n
+
+    counts = _count_insertions(
+        acceptable, cell_indices, objectives, old_occupied, boundaries
+    )
+    return [{"id": em_id, **c} for em_id, c in enumerate(counts)]
 
 
 def concentration_gini(counts: list[int]) -> float:
@@ -158,74 +241,6 @@ def compute_emitter_spread(scheduler: Scheduler) -> float:
     if len(means) == 0:
         return 0.0
     return float(np.mean(np.std(means, axis=0)))
-
-
-def compute_emitter_insertions(
-    result: EvalResult,
-    objectives: np.ndarray,
-    old_occupied: dict[int, float],
-    archive: GridArchive,
-    scheduler: Scheduler,
-) -> list[dict]:
-    """Attribute archive insertions to the emitters that produced them.
-
-    Uses ``scheduler._num_emitted`` to determine which emitter produced
-    each solution in the batch (solutions are contiguous per emitter).
-
-    Parameters
-    ----------
-    result : EvalResult
-        Scoring results for this generation.
-    objectives : np.ndarray
-        Thresholded/capped objectives passed to ``scheduler.tell``.
-    old_occupied : dict of int to float
-        Cell-index to objective snapshot taken *before* ``tell``.
-    archive : GridArchive
-        The archive insertion was performed into.
-    scheduler : Scheduler
-        The pyribs scheduler (provides emitter boundaries via
-        ``_num_emitted``).
-
-    Returns
-    -------
-    list of dict
-        Each dict has keys ``"id"``, ``"inserted_new"``,
-        ``"improved_existing"``, ``"rejected"``.
-    """
-    acceptable = _acceptable_mask(result.measures, objectives, archive)
-    all_indices = archive.index_of(result.measures)
-
-    boundaries: list[tuple[int, int]] = []
-    pos = 0
-    for n in scheduler._num_emitted:
-        boundaries.append((pos, pos + n))
-        pos += n
-
-    emitter_stats: list[dict] = []
-    for em_id, (start, end) in enumerate(boundaries):
-        inserted_new = 0
-        improved_existing = 0
-        rejected = 0
-        for i in range(start, min(end, len(objectives))):
-            if not acceptable[i]:
-                rejected += 1
-                continue
-            cell_idx = int(all_indices[i])
-            if cell_idx not in old_occupied:
-                inserted_new += 1
-            elif objectives[i] > old_occupied[cell_idx]:
-                improved_existing += 1
-            else:
-                rejected += 1
-        emitter_stats.append(
-            {
-                "id": em_id,
-                "inserted_new": inserted_new,
-                "improved_existing": improved_existing,
-                "rejected": rejected,
-            }
-        )
-    return emitter_stats
 
 
 class RealObjectiveTracker:

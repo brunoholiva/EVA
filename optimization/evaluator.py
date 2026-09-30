@@ -65,10 +65,10 @@ class Evaluator:
     def __init__(
         self,
         decode,
-        activity=None,
-        activity_model=None,
-        featurizer=None,
-        archive_cfg: ArchiveConfig | None = None,
+        activity,
+        activity_model,
+        featurizer,
+        archive_cfg: ArchiveConfig,
     ) -> None:
         self._decode_fn = decode
         self._activity_fn = activity

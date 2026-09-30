@@ -174,6 +174,13 @@ class CMAMAELoop:
         return self._result_archive
 
     @property
+    def report_archive(self) -> GridArchive:
+        """The archive used for reporting: result archive if present, else primary."""
+        return (
+            self._result_archive if self._result_archive is not None else self._archive
+        )
+
+    @property
     def scheduler(self) -> Scheduler:
         """The underlying scheduler."""
         return self._scheduler
