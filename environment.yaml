@@ -4,32 +4,36 @@ channels:
   - conda-forge
 
 dependencies:
+  # python and pip are deliberately not pinned to an exact build: the conda
+  # solver handles them specially and tightening them is a common source of
+  # unsolvable environments. Everything below is pinned to the version
+  # verified working in micromamba env "eva2".
   - python==3.12
   - pip
-  - rdkit
-  - numpy
-  - scipy
-  - pandas
-  - scikit-learn
+  - rdkit==2023.9.6
+  - numpy==1.26.4
+  - scipy==1.17.1
+  - pandas==2.3.3
+  - scikit-learn==1.9.0
 
   - pip:
-      - torch
-      - tabpfn
-      - lightning
-      - descriptastorus
+      - torch==2.13.0
+      - tabpfn==9.0.0
+      - lightning==2.6.5
+      - descriptastorus==2.8.0
       - chemprop==2.2.3
-      - selfies
-      - setuptools<82
-      - aizynthfinder
-      - ribs[all]
-      - tensorboard
+      - selfies==2.2.0
+      - setuptools==81.0.0
+      - aizynthfinder==4.4.1
+      - ribs[all]==0.8.3
+      - tensorboard==2.21.0
 
-      - matplotlib
-      - seaborn
-      - huggingface_hub
-      - rich
-      - toml
+      - matplotlib==3.11.1
+      - seaborn==0.13.2
+      - huggingface_hub==1.26.0
+      - rich==15.0.0
+      - toml==0.10.2
 
-      - pytest
-      - fastparquet
-      - chembl_structure_pipeline
+      - pytest==9.1.1
+      - fastparquet==2026.5.0
+      - chembl_structure_pipeline==1.2.4
