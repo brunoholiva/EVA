@@ -4,4 +4,4 @@ data/
 sandbox/
 results/
 .venv/
-*.parquet
+*.parquetnotebooks/cache/
