@@ -12,7 +12,7 @@ from joblib import Parallel, delayed
 from rdkit import Chem
 
 from optimization.constants import INVALID_MOLECULE_OBJECTIVE
-from reporting.suppress import suppress_joblib_warnings
+from logs import suppress_joblib_warnings
 
 suppress_joblib_warnings()
 

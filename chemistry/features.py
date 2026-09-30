@@ -8,7 +8,7 @@ import numpy as np
 from joblib import Parallel, delayed, effective_n_jobs
 from rdkit import Chem
 
-from reporting.suppress import suppress_joblib_warnings
+from logs import suppress_joblib_warnings
 
 suppress_joblib_warnings()
 

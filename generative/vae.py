@@ -10,7 +10,7 @@ from chembed import decode as dec
 from chembed import encode as enc
 from rdkit import Chem
 
-from reporting.suppress import suppress_rdkit_logs
+from logs import suppress_rdkit_logs
 
 suppress_rdkit_logs()
 

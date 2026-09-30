@@ -5,7 +5,7 @@ from __future__ import annotations
 from rdkit import Chem
 from rdkit.Chem.Scaffolds import MurckoScaffold
 
-from reporting.suppress import suppress_rdkit_logs
+from logs import suppress_rdkit_logs
 
 suppress_rdkit_logs()
 
