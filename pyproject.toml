@@ -1,0 +1,50 @@
+[project]
+name = "EVA"
+version = "0.1.0"
+description = "Evolution of Viable Antibiotics"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "rdkit==2023.9.6", "numpy==1.26.4", "scipy==1.17.1", "pandas==2.3.3",
+    "scikit-learn==1.9.0", "descriptastorus==2.8.0", "selfies==2.2.0",
+    "tabpfn==9.0.0",
+    "torch==2.13.0", "chembed==1.0.1", "chemprop==2.2.3", "lightning==2.6.5",
+    "chembl-structure-pipeline==1.2.4", "fastparquet==2026.5.0", "setuptools==81.0.0",
+    "ribs[all]==0.8.3", "tensorboard==2.21.0", "aizynthfinder==4.4.1",
+    "rich==15.0.0", "matplotlib==3.11.1", "seaborn==0.13.2",
+    "huggingface-hub==1.26.0", "toml==0.10.2",
+]
+
+[dependency-groups]
+dev = ["pytest==9.1.1", "ruff==0.15.11", "black==26.3.1"]
+
+[tool.uv]
+package = false
+dependency-metadata = [
+    # chembed declares 26 requirements we deliberately do not want: tensorflow,
+    # polars, duckdb, torchvision, and hard floors of rdkit>=2024.3.5 and
+    # numpy>=2.0. This project pins rdkit 2023.9.6 / numpy 1.26.4, and those
+    # floors are never actually needed -- only chembed.decode/encode are used.
+    { name = "chembed", version = "1.0.1", requires-dist = [] },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+
+[tool.ruff]
+line-length = 88
+extend-exclude = ["notebooks"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "D", "N"]
+ignore = ["N803", "N806"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D1"]
