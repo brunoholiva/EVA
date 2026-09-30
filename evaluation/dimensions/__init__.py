@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 from rdkit.Chem import Descriptors, GraphDescriptors
 
-from evaluation.molecules import ParsedMolecules
+from chemistry.molecules import ParsedMolecules
 
 
 def _descriptor_values(parsed: ParsedMolecules, fn) -> np.ndarray:

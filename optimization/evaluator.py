@@ -5,18 +5,13 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
-
 import numpy as np
-import selfies as sf
-from joblib import Parallel, delayed
-from rdkit import Chem
-
 from optimization.constants import INVALID_MOLECULE_OBJECTIVE
 from logs import suppress_joblib_warnings
+from chemistry.smiles import parse_and_canonical_batch
 
 suppress_joblib_warnings()
 
-MAX_SELFIES_TOKENS = 200
 
 if TYPE_CHECKING:
     from config import ArchiveConfig
@@ -115,7 +110,7 @@ class Evaluator:
         timings.decode = time.time() - t1
 
         t1 = time.time()
-        valid_mask, canonical = _validity_and_canonical(smiles_list)
+        valid_mask, canonical = parse_and_canonical_batch(smiles_list)
         timings.validity = time.time() - t1
 
         new_mask = _dedup_mask(canonical, valid_mask, self._seen_smiles)
@@ -177,7 +172,7 @@ class Evaluator:
             Dictionary mapping dimension names to computed values.
         """
         from evaluation.dimensions import compute_dimension
-        from evaluation.molecules import ParsedMolecules
+        from chemistry.molecules import ParsedMolecules
 
         parsed = ParsedMolecules(valid_smiles)
         dim_configs = {d.name: d for d in self._archive_cfg.dimensions}
@@ -252,50 +247,6 @@ class _ScoreBundle:
 
     dim_scores: dict[str, np.ndarray]
     pa: np.ndarray
-
-
-def _parse_and_canonical(smi: str) -> tuple[bool, str | None]:
-    """Parse a SMILES string and return ``(valid, canonical)``.
-
-    Returns ``(False, None)`` for empty strings, failed RDKit parsing,
-    SELFIES token counts exceeding *MAX_SELFIES_TOKENS*, or SMILES that
-    RDKit parses but fails to canonicalize (``MolToSmiles`` invariant
-    violations on degenerate molecules).
-    """
-    if not smi:
-        return False, None
-    mol = Chem.MolFromSmiles(smi)
-    if mol is None:
-        return False, None
-    try:
-        selfies = sf.encoder(smi)
-        tokens = list(sf.split_selfies(selfies))
-        if len(tokens) > MAX_SELFIES_TOKENS:
-            return False, None
-    except Exception:
-        return False, None
-    try:
-        canonical = Chem.MolToSmiles(mol)
-    except Exception:
-        return False, None
-    return True, canonical
-
-
-def _validity_and_canonical(
-    smiles: list[str], n_jobs: int = -1
-) -> tuple[np.ndarray, list[str | None]]:
-    """Return ``(valid_mask, canonical)`` for a batch of SMILES strings.
-
-    The validity check (including canonicalization) runs in parallel.
-    Deduplication is *not* done here — it is handled by the caller via
-    the ``seen`` set.
-    """
-    results = Parallel(n_jobs=n_jobs, prefer="processes")(
-        delayed(_parse_and_canonical)(s) for s in smiles
-    )
-    valid = np.array([r[0] for r in results], dtype=bool)
-    canonical = [r[1] for r in results]
-    return valid, canonical
 
 
 def _dedup_mask(
