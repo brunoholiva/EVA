@@ -5,7 +5,7 @@ exploits data and predictor-model biases. EVA uses quality-diversity search:
 molecules compete only within the same niche of a configurable behavior space,
 instead of chasing one optimal solution.  While diverse, in a real chemical space, antibiotics tend to cluster far apart from each other, so we need to balance exploration vs exploitation very carefully.
 
-- **Search:** The search uses PyRibs emitters to explore/exploit the latent space of the [ChemBed](https://link.springer.com/article/10.1186/s13321-026-01243-0) VAE, so evolution operates on a continuous learned molecular representation. Specifically, we are employing CMA-MAE, where each of the 16 emitters evolves its own CMA-ES population of latent vectors, which the VAE decodes into SMILES. 12 of them restart from a fresh random point every 50 generations, and the other 4 restart from their own best solution, so the ensemble keeps looking for new basins without abandoning the ones it already found. Each generation proposes 512 molecules.
+- **Search:** The search uses PyRibs emitters to explore/exploit the latent space of the [ChemBed](https://link.springer.com/article/10.1186/s13321-026-01243-0) VAE, so evolution operates on a continuous learned molecular representation. Specifically, we are employing CMA-MAE, where each of the 16 emitters evolves its own CMA-ES population of latent vectors, which the VAE decodes into SMILES.
 
 - **Scoring:** a **TabPFN v3.5** classifier trained on the public
   [GNEtolC](https://github.com/Genentech/gneprop) dataset predicts P(active). This functions as the reward for our  search, therefore, molecules are only as good as the model and data that were used to train.
@@ -15,7 +15,7 @@ instead of chasing one optimal solution.  While diverse, in a real chemical spac
 - **Behavior space:** These will be the primary drivers for the notion of diversity in the search. They are not guaranteed to accurately reflect _structural_ diversity, as diverisity in this case are in the terms of the dimension itself. For now, any combination of the dimensions are available:
   `logp`, `tpsa`, `mw`, `fsp3`, `num_rotb`, `num_rings`, `balabanj`,
   `vsa_estate2`, `bcut2d_logplow`. 
-  The current default map is `fsp3 × tpsa × vsa_estate2`, a grid of 3,750 cells. The ranges are set from the observed support of the training actives, so no resolution is spent on empty space, and a cell is only replaced by a better-scoring molecule rather than by a different one.
+  For now, the ranges are set from the observed support of the training actives, so no resolution is spent on empty space, and a cell is only replaced by a better-scoring molecule rather than by a different one.
 
 Most generation parameters can be easily changed in `config.toml`
 
@@ -28,11 +28,6 @@ resolves the full dependency tree and pins it in `uv.lock`:
 uv python pin 3.12
 uv sync
 ```
-
-ChemBed declares extra dependencies (tensorflow, polars, duckdb, etc.) that
-conflict with the versions pinned here. `pyproject.toml` overrides its
-declared dependencies to an empty list via `tool.uv.dependency-metadata`, so
-`uv sync` installs `chembed==1.0.1` without pulling those extras.
 
 The conda environment is kept as a fallback. `environment.yaml` pins the same
 versions, but there `chembed` has to be installed by hand:
@@ -76,10 +71,14 @@ uv run python EVA.py --config config.toml
   molecule that was scored, `result_archive.csv` with the best molecule per
   cell, `scheduler.joblib` for resuming, and `heatmap.png`. Metrics are
   streamed to `tensorboard/` inside the same directory.
+  
+To resume an interrupted run:
 
+```bash
+uv run python EVA.py --resume path/to/scheduler.joblib
+```
 
 ## TODO
 
 - Make the predictor public
-- Report the behavior-space and emitter ablations
 - Release the archives and the best candidates from each run
