@@ -41,10 +41,9 @@ class EmitterConfig:
     batch_size: int
     n_emitters: int
     bounds: float = 3.0
-    # int  -> restart every N generations (deterministic drift control).
-    # "basic" / "no_improvement" -> pyribs rules; note "basic" only fires on
-    # CMA-ES convergence (cond > 1e14, sigma*sqrt(max_eig) < 1e-11, or flat
-    # rankings), which in practice means it never restarts.
+    restart_every: int = 50
+    n_keeper_emitters: int = 4
+    # Kept for loading older configs; mixed restarts use restart_every.
     restart_rule: int | str = "basic"
 
 

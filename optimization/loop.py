@@ -26,6 +26,42 @@ GenerationCallback = Callable[[int, EvalResult, GridArchive], None]
 StepCallback = Callable[[int, EvalResult, GridArchive], None]
 
 
+class _MixedRestartEmitter(EvolutionStrategyEmitter):
+    """Evolution-strategy emitter with random and local-best restarts."""
+
+    def __init__(self, *args, random_restart: bool, restart_seed: int, **kwargs):
+        self._random_restart = random_restart
+        self._restart_rng = np.random.default_rng(restart_seed)
+        self._best_solution = np.asarray(kwargs["x0"], dtype=np.float64).copy()
+        self._best_objective = -np.inf
+        self._last_restart_kind = "none"
+        self._last_restart_distance = 0.0
+        super().__init__(*args, **kwargs)
+
+    def tell(self, solution, objective, measures, add_info, **fields):
+        """Update CMA-ES and replace archive restarts with mixed restarts."""
+        objective = np.asarray(objective)
+        best_idx = int(np.argmax(objective))
+        if objective[best_idx] > self._best_objective:
+            self._best_objective = float(objective[best_idx])
+            self._best_solution = np.asarray(solution[best_idx]).copy()
+
+        previous_restarts = self.restarts
+        super().tell(solution, objective, measures, add_info, **fields)
+        if self.restarts == previous_restarts:
+            return
+
+        old_mean = self._opt.mean.copy()
+        if self._random_restart:
+            restart = self._restart_rng.standard_normal(self.solution_dim)
+            self._last_restart_kind = "random"
+        else:
+            restart = self._best_solution
+            self._last_restart_kind = "local_best"
+        self._opt.reset(restart)
+        self._last_restart_distance = float(np.linalg.norm(restart - old_mean))
+
+
 def build_scheduler(
     archive_cfg: ArchiveConfig,
     emitter_cfg: EmitterConfig,
@@ -68,24 +104,28 @@ def build_scheduler(
     )
 
     emitters = []
-    n_emitters = emitter_cfg.n_emitters
+    n_random = emitter_cfg.n_emitters - emitter_cfg.n_keeper_emitters
+    if emitter_cfg.n_keeper_emitters < 0 or n_random < 0:
+        raise ValueError("n_keeper_emitters must not exceed n_emitters")
 
-    for i in range(n_emitters):
+    for i in range(emitter_cfg.n_emitters):
         rng = np.random.default_rng(seed + i)
         x0 = rng.standard_normal(archive_cfg.solution_dim).astype(np.float64)
 
-        emitter = EvolutionStrategyEmitter(
+        emitter = _MixedRestartEmitter(
             archive=archive,
             ranker="imp",
             es="cma_es",
             selection_rule="mu",
-            restart_rule=emitter_cfg.restart_rule,
+            restart_rule=emitter_cfg.restart_every,
             x0=x0,
             sigma0=emitter_cfg.sigma0,
             bounds=[(-emitter_cfg.bounds, emitter_cfg.bounds)]
             * archive_cfg.solution_dim,
             batch_size=emitter_cfg.batch_size,
             seed=seed + i,
+            random_restart=i < n_random,
+            restart_seed=seed + 10_000 + i,
         )
         emitters.append(emitter)
 
