@@ -3,3 +3,5 @@ __pycache__
 data/
 sandbox/
 results/
+.venv/
+*.parquet
