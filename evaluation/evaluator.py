@@ -3,14 +3,25 @@
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+
 import numpy as np
-from optimization.constants import INVALID_MOLECULE_OBJECTIVE
-from logs import suppress_joblib_warnings
+
+from chemistry.molecules import ParsedMolecules
 from chemistry.smiles import parse_and_canonical_batch
+from evaluation.dimensions import compute_dimension
+from logs import suppress_joblib_warnings
 
 suppress_joblib_warnings()
+
+INVALID_MOLECULE_OBJECTIVE: float = -1.0
+"""Objective value assigned to candidates that cannot be decoded or scored.
+
+Since pyribs maximises objectives, a value below ``threshold_min`` ensures
+invalid molecules are never inserted into the archive.
+"""
 
 
 if TYPE_CHECKING:
@@ -136,7 +147,6 @@ class Evaluator:
             return None
 
         t1 = time.time()
-        from concurrent.futures import ThreadPoolExecutor
 
         X = self._featurizer.transform(valid_smiles)
         timings.featurize_predict = time.time() - t1
@@ -171,9 +181,6 @@ class Evaluator:
         dict of str to np.ndarray
             Dictionary mapping dimension names to computed values.
         """
-        from evaluation.dimensions import compute_dimension
-        from chemistry.molecules import ParsedMolecules
-
         parsed = ParsedMolecules(valid_smiles)
         dim_configs = {d.name: d for d in self._archive_cfg.dimensions}
 

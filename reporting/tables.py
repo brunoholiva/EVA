@@ -10,7 +10,7 @@ from ribs.archives import GridArchive
 from reporting.console import console, make_table, section
 
 if TYPE_CHECKING:
-    from optimization.evaluator import EvalResult
+    from evaluation.evaluator import EvalResult
 
 
 def print_generation(

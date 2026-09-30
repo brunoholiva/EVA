@@ -11,7 +11,7 @@ from ribs.archives import GridArchive
 from torch.utils.tensorboard import SummaryWriter
 
 from config import ExperimentConfig, TensorBoardConfig
-from optimization.evaluator import EvalResult
+from evaluation.evaluator import EvalResult
 from reporting.plotting import create_archive_figure
 
 

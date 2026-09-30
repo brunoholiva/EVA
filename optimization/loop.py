@@ -11,8 +11,7 @@ from ribs.emitters import EvolutionStrategyEmitter
 from ribs.schedulers import Scheduler
 
 from config import ArchiveConfig, EmitterConfig
-from optimization.constants import INVALID_MOLECULE_OBJECTIVE
-from optimization.evaluator import EvalResult
+from evaluation.evaluator import INVALID_MOLECULE_OBJECTIVE, EvalResult
 from optimization.tracking import (
     RealObjectiveTracker,
     compute_emitter_insertions,

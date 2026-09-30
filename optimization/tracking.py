@@ -6,8 +6,7 @@ import numpy as np
 from ribs.archives import GridArchive
 from ribs.schedulers import Scheduler
 
-from optimization.constants import INVALID_MOLECULE_OBJECTIVE
-from optimization.evaluator import EvalResult
+from evaluation.evaluator import INVALID_MOLECULE_OBJECTIVE, EvalResult
 
 
 def occupied_cells(archive: GridArchive) -> dict[int, float]:
