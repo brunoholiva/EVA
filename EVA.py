@@ -41,7 +41,7 @@ def _parse_args(argv: list[str] | None) -> tuple[str, str | None]:
     return args.config, args.resume
 
 
-def _load_vae(cfg: ExperimentConfig) -> ChemBedVAE | ProjectedVAE:
+def load_vae(cfg: ExperimentConfig) -> ChemBedVAE | ProjectedVAE:
     """Load the ChemBed VAE, optionally wrapped with PCA projection."""
     step("Loading ChemBed VAE")
     vae = ChemBedVAE(
@@ -57,7 +57,7 @@ def _load_vae(cfg: ExperimentConfig) -> ChemBedVAE | ProjectedVAE:
     return vae
 
 
-def _load_activity_oracle(cfg: ExperimentConfig):
+def load_activity_oracle(cfg: ExperimentConfig):
     """Load the activity model and its matching feature transformer."""
     step("Loading activity oracle")
     tabpfn = load_tabpfn(
@@ -151,9 +151,8 @@ def _run_loop(
 
             report_archive = loop.report_archive
             stats = report_archive.stats
-            n_valid = int(result.n_valid)
-            oracle_counter[0] += n_valid
-            if n_valid > 0:
+            oracle_counter[0] += result.n_oracle_calls
+            if result.n_oracle_calls > 0:
                 tb_logger.log_coverage_checkpoint(
                     float(stats.coverage),
                     int(stats.num_elites),
@@ -243,8 +242,8 @@ def main(argv: list[str | None] | None = None) -> None:
     tb_logger = TensorBoardLogger(cfg.tensorboard, output_dir)
     tb_logger.log_config(cfg)
 
-    vae = _load_vae(cfg)
-    tabpfn, featurizer = _load_activity_oracle(cfg)
+    vae = load_vae(cfg)
+    tabpfn, featurizer = load_activity_oracle(cfg)
 
     evaluator = Evaluator(
         decode=vae.decode,

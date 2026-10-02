@@ -52,6 +52,21 @@ class EvalResult:
     gen_time: float
     timings: EvalTimings = field(default_factory=EvalTimings)
     n_duplicates: int = 0
+    n_oracle_calls: int = 0
+    """Candidates actually sent to the predictor.
+
+    Counts first-seen chemically valid canonical SMILES, i.e. the number of
+    ``predict_proba`` invocations. A molecule is charged even if a behaviour
+    descriptor later turns out non-finite, since the predictor already ran.
+    ``n_valid`` is *not* a substitute: it also counts valid duplicates, which
+    are never scored.
+    """
+    canonical: list[str | None] | None = None
+    """Canonical SMILES per attempt; ``None`` for chemically invalid ones.
+
+    Already computed for deduplication, so exposing it avoids a second RDKit
+    pass when writing per-attempt logs.
+    """
 
 
 class Evaluator:
@@ -97,10 +112,9 @@ class Evaluator:
     def __call__(self, z: np.ndarray) -> EvalResult:
         """Score a batch of latent vectors.
 
-        Duplicate molecules (same canonical SMILES seen before) are
-        skipped — they receive ``INVALID_MOLECULE_OBJECTIVE`` and zero
-        measures, avoiding redundant featurization, prediction, and
-        dimension scoring.
+        Thin wrapper that decodes *z* to SMILES and delegates to
+        :meth:`evaluate_smiles`. Dedup state is shared, so mixing calls of both
+        kinds is safe.
 
         Parameters
         ----------
@@ -112,13 +126,36 @@ class Evaluator:
         EvalResult
             Objectives (P(active)), behavior coords, and metadata.
         """
-        timings = EvalTimings()
-        t0 = time.time()
-        n = len(z)
-
         t1 = time.time()
         smiles_list = self._decode_fn(z)
-        timings.decode = time.time() - t1
+        decode_time = time.time() - t1
+
+        result = self.evaluate_smiles(smiles_list)
+        result.timings.decode = decode_time
+        result.gen_time += decode_time
+        return result
+
+    def evaluate_smiles(self, smiles_list: list[str]) -> EvalResult:
+        """Score a batch of SMILES strings.
+
+        Duplicate molecules (same canonical SMILES seen before) are
+        skipped — they receive ``INVALID_MOLECULE_OBJECTIVE`` and zero
+        measures, avoiding redundant featurization, prediction, and
+        dimension scoring.
+
+        Parameters
+        ----------
+        smiles_list : list of str
+            Candidate SMILES, from any generator.
+
+        Returns
+        -------
+        EvalResult
+            Objectives (P(active)), behavior coords, and metadata.
+        """
+        timings = EvalTimings()
+        t0 = time.time()
+        n = len(smiles_list)
 
         t1 = time.time()
         valid_mask, canonical = parse_and_canonical_batch(smiles_list)
@@ -132,7 +169,9 @@ class Evaluator:
         scores = self._score_valid(valid_smiles, timings)
 
         t1 = time.time()
-        result = self._assemble(n, valid_mask, new_mask, smiles_list, scores)
+        result = self._assemble(
+            n, valid_mask, new_mask, smiles_list, canonical, scores
+        )
         timings.assemble = time.time() - t1
 
         result.gen_time = time.time() - t0
@@ -207,6 +246,7 @@ class Evaluator:
         valid_mask: np.ndarray,
         new_mask: np.ndarray,
         smiles_list: list[str],
+        canonical: list[str | None],
         scores: _ScoreBundle | None,
     ) -> EvalResult:
         """Map per-molecule scores back to the full candidate array.
@@ -245,6 +285,8 @@ class Evaluator:
             n_valid=int(valid_mask.sum()),
             gen_time=0.0,
             n_duplicates=n_duplicates,
+            n_oracle_calls=int(new_mask.sum()),
+            canonical=list(canonical),
         )
 
 
