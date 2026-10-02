@@ -212,6 +212,62 @@ class CMAMAELoop:
                     entry["inserted_new"] + entry["improved_existing"]
                 )
 
+    def step(self) -> EvalResult:
+        """Run one ask/evaluate/tell generation.
+
+        Returns
+        -------
+        EvalResult
+            Scoring results for this generation. Latent vectors are kept
+            internal, so callers that need them (benchmark harnesses) should
+            wrap the evaluator rather than reach in here.
+        """
+        t_archive_start = time.time()
+        old_primary_cells = occupied_cells(self._archive)
+        old_result_cells = (
+            occupied_cells(self._result_archive)
+            if self._result_archive is not None
+            else {}
+        )
+
+        z = self._scheduler.ask()
+        result = self._evaluate(z)
+
+        objectives = self._mark_rejected_for_ranking(result.objectives)
+        self._scheduler.tell(objectives, result.measures)
+
+        self._tracker.update(
+            self._archive,
+            self._result_archive,
+            z,
+            result,
+            objectives,
+            old_primary_cells,
+            old_result_cells,
+        )
+
+        self.last_insertion_stats = compute_insertion_stats(
+            result,
+            objectives,
+            old_primary_cells,
+            self._archive,
+        )
+        self.last_emitter_stats = compute_emitter_stats(self._scheduler)
+        self.last_emitter_insertions = compute_emitter_insertions(
+            result,
+            objectives,
+            old_primary_cells,
+            self._archive,
+            self._scheduler,
+        )
+        self.last_emitter_spread = compute_emitter_spread(self._scheduler)
+        self._accumulate_emitter_insertions(self.last_emitter_insertions)
+
+        if result.timings is not None:
+            result.timings.archive_ops = time.time() - t_archive_start
+
+        return result
+
     def run(
         self,
         n_generations: int,
@@ -243,49 +299,7 @@ class CMAMAELoop:
             The final archive of scored candidates.
         """
         for gen in range(start_gen, n_generations):
-            t_archive_start = time.time()
-            old_primary_cells = occupied_cells(self._archive)
-            old_result_cells = (
-                occupied_cells(self._result_archive)
-                if self._result_archive is not None
-                else {}
-            )
-
-            z = self._scheduler.ask()
-            result = self._evaluate(z)
-
-            objectives = self._mark_rejected_for_ranking(result.objectives)
-            self._scheduler.tell(objectives, result.measures)
-
-            self._tracker.update(
-                self._archive,
-                self._result_archive,
-                z,
-                result,
-                objectives,
-                old_primary_cells,
-                old_result_cells,
-            )
-
-            self.last_insertion_stats = compute_insertion_stats(
-                result,
-                objectives,
-                old_primary_cells,
-                self._archive,
-            )
-            self.last_emitter_stats = compute_emitter_stats(self._scheduler)
-            self.last_emitter_insertions = compute_emitter_insertions(
-                result,
-                objectives,
-                old_primary_cells,
-                self._archive,
-                self._scheduler,
-            )
-            self.last_emitter_spread = compute_emitter_spread(self._scheduler)
-            self._accumulate_emitter_insertions(self.last_emitter_insertions)
-
-            if result.timings is not None:
-                result.timings.archive_ops = time.time() - t_archive_start
+            result = self.step()
 
             if on_step:
                 on_step(gen, result, self._archive)
