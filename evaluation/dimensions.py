@@ -29,6 +29,7 @@ DIMENSIONS = {
     "balabanj": GraphDescriptors.BalabanJ,
     "vsa_estate2": Descriptors.VSA_EState2,
     "bcut2d_logplow": Descriptors.BCUT2D_LOGPLOW,
+    "max_partial_charge": Descriptors.MaxPartialCharge,
 }
 
 

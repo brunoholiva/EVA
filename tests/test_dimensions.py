@@ -18,6 +18,17 @@ def test_descriptor_dimension_returns_one_value_per_molecule() -> None:
     )
 
 
+def test_archive_dimensions_are_registered() -> None:
+    import numpy as np
+
+    parsed = ParsedMolecules(["CCO"])
+
+    for name in ("bcut2d_logplow", "max_partial_charge"):
+        values = compute_dimension(name, parsed)
+        assert values.shape == (1,)
+        assert np.isfinite(values[0])
+
+
 def test_invalid_molecule_gets_nan() -> None:
     import numpy as np
 
