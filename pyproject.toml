@@ -12,6 +12,11 @@ dependencies = [
     "ribs[all]==0.8.3", "tensorboard==2.21.0", "aizynthfinder==4.4.1",
     "rich==15.0.0", "matplotlib==3.11.1", "seaborn==0.13.2",
     "huggingface-hub==1.26.0", "toml==0.10.2",
+    # MiniMol fingerprints as ONNX (no graphium / compiled PyG extensions).
+    # datamol is pinned because 0.13+ requires rdkit>=2024.9.1, which would
+    # break this project's deliberate rdkit==2023.9.6 pin.
+    "minimol-onnx==0.1.1", "datamol==0.12.5", "torch-geometric==2.8.1",
+    "onnxruntime==1.30.0",
 ]
 
 [dependency-groups]

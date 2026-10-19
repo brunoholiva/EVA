@@ -837,6 +837,33 @@ dataframe = [
 ]
 
 [[package]]
+name = "datamol"
+version = "0.12.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "fsspec" },
+    { name = "importlib-resources" },
+    { name = "joblib" },
+    { name = "loguru" },
+    { name = "matplotlib" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "pandas" },
+    { name = "pillow" },
+    { name = "platformdirs" },
+    { name = "rdkit" },
+    { name = "scikit-learn" },
+    { name = "scipy" },
+    { name = "selfies" },
+    { name = "tqdm" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e4/87/5e0eeea2f1bf4de215de2d74af78f041de1936214de9009d46e4ff7503cf/datamol-0.12.5.tar.gz", hash = "sha256:8f0c6f498d542b0c9182f685ba46860f0628ac4c0caa3b195923150641bdcc57", size = 3898590, upload-time = "2024-06-10T16:09:29.679Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d4/e7/3df58df1af04dcc694a6c970e7138ba3ec3447a442deb427914438326107/datamol-0.12.5-py3-none-any.whl", hash = "sha256:70a3c60ac3379d853611e266051ea38aad02bb44611d56cc7e8a470f904d704d", size = 495391, upload-time = "2024-06-10T16:09:25.931Z" },
+]
+
+[[package]]
 name = "debugpy"
 version = "1.8.22"
 source = { registry = "https://pypi.org/simple" }
@@ -920,12 +947,15 @@ dependencies = [
     { name = "chembed" },
     { name = "chembl-structure-pipeline" },
     { name = "chemprop" },
+    { name = "datamol" },
     { name = "descriptastorus" },
     { name = "fastparquet" },
     { name = "huggingface-hub" },
     { name = "lightning" },
     { name = "matplotlib" },
+    { name = "minimol-onnx" },
     { name = "numpy" },
+    { name = "onnxruntime" },
     { name = "pandas" },
     { name = "rdkit" },
     { name = "ribs", extra = ["all"] },
@@ -939,6 +969,7 @@ dependencies = [
     { name = "tensorboard" },
     { name = "toml" },
     { name = "torch" },
+    { name = "torch-geometric" },
 ]
 
 [package.dev-dependencies]
@@ -954,12 +985,15 @@ requires-dist = [
     { name = "chembed", specifier = "==1.0.1" },
     { name = "chembl-structure-pipeline", specifier = "==1.2.4" },
     { name = "chemprop", specifier = "==2.2.3" },
+    { name = "datamol", specifier = "==0.12.5" },
     { name = "descriptastorus", specifier = "==2.8.0" },
     { name = "fastparquet", specifier = "==2026.5.0" },
     { name = "huggingface-hub", specifier = "==1.26.0" },
     { name = "lightning", specifier = "==2.6.5" },
     { name = "matplotlib", specifier = "==3.11.1" },
+    { name = "minimol-onnx", specifier = "==0.1.1" },
     { name = "numpy", specifier = "==1.26.4" },
+    { name = "onnxruntime", specifier = "==1.30.0" },
     { name = "pandas", specifier = "==2.3.3" },
     { name = "rdkit", specifier = "==2023.9.6" },
     { name = "ribs", extras = ["all"], specifier = "==0.8.3" },
@@ -973,6 +1007,7 @@ requires-dist = [
     { name = "tensorboard", specifier = "==2.21.0" },
     { name = "toml", specifier = "==0.10.2" },
     { name = "torch", specifier = "==2.13.0", index = "https://download.pytorch.org/whl/cu130" },
+    { name = "torch-geometric", specifier = "==2.8.1" },
 ]
 
 [package.metadata.requires-dev]
@@ -1252,6 +1287,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f5/08/8eea9d4b8302028f3abb2c0813953f7aec26d33b7a8960ed760e65ff29fa/idna-3.20.tar.gz", hash = "sha256:a7db850025b95ded1eae8a46181a1a6c56c92c96f0e2b005d9ff8dc0210cab44", size = 216463, upload-time = "2026-09-17T14:11:04.752Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/58/a2/bb081bab032533a855d44de1d56f8e8426114ff1ba5d1f07a438a0a654f8/idna-3.20-py3-none-any.whl", hash = "sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c", size = 69583, upload-time = "2026-09-17T14:11:03.168Z" },
+]
+
+[[package]]
+name = "importlib-resources"
+version = "7.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e4/06/b56dfa750b44e86157093bc8fca0ab81dccbf5260510de4eaf1cb69b5b99/importlib_resources-7.1.0.tar.gz", hash = "sha256:0722d4c6212489c530f2a145a34c0a7a3b4721bc96a15fada5930e2a0b760708", size = 44985, upload-time = "2026-04-12T16:36:09.232Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8a/db/55a262f3606bebcae07cc14095338471ad7c0bbcaa37707e6f0ee49725b7/importlib_resources-7.1.0-py3-none-any.whl", hash = "sha256:1bd7b48b4088eddb2cd16382150bb515af0bd2c70128194392725f82ad2c96a1", size = 37232, upload-time = "2026-04-12T16:36:08.219Z" },
 ]
 
 [[package]]
@@ -1829,6 +1873,19 @@ wheels = [
 ]
 
 [[package]]
+name = "loguru"
+version = "0.7.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "colorama", marker = "sys_platform == 'win32'" },
+    { name = "win32-setctime", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3a/05/a1dae3dffd1116099471c643b8924f5aa6524411dc6c63fdae648c4f1aca/loguru-0.7.3.tar.gz", hash = "sha256:19480589e77d47b8d85b2c827ad95d49bf31b0dcde16593892eb51dd18706eb6", size = 63559, upload-time = "2024-12-06T11:20:56.608Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0c/29/0348de65b8cc732daa3e33e67806420b2ae89bdce2b04af740289c5c6c8c/loguru-0.7.3-py3-none-any.whl", hash = "sha256:31a33c10c8e1e10422bfd431aeb5d351c7cf7fa671e3c4df004162264b28220c", size = 61595, upload-time = "2024-12-06T11:20:54.538Z" },
+]
+
+[[package]]
 name = "markdown"
 version = "3.11"
 source = { registry = "https://pypi.org/simple" }
@@ -1947,6 +2004,27 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f6/e7/91559675553f7a4b685905d63fa690b074b069383322efea71377a23a470/mhfp-1.9.6.tar.gz", hash = "sha256:646909a166d3b0e375c4497f653be45fe6e086ae9214e251b4a85c5ca9b6ad42", size = 23562, upload-time = "2023-02-16T08:25:48.182Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/40/02/dc8584d5b477eefea7090a581312e8e3f0f5b62d144f6089311070e82c3e/mhfp-1.9.6-py3-none-any.whl", hash = "sha256:164793a1c66b1b40a075accb62fb569fe8be2ee1b8146fac7e4fe087001897a8", size = 9736, upload-time = "2023-02-16T08:25:46.573Z" },
+]
+
+[[package]]
+name = "minimol-onnx"
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "datamol" },
+    { name = "loguru" },
+    { name = "networkx" },
+    { name = "numpy" },
+    { name = "onnxruntime" },
+    { name = "pandas" },
+    { name = "rdkit" },
+    { name = "scipy" },
+    { name = "torch" },
+    { name = "torch-geometric" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/42/10/9fe06029b90b27ab1d3864e41575660723ffc7131dd75640a76b97c03481/minimol_onnx-0.1.1.tar.gz", hash = "sha256:ec41e061801fcf5a0a1266aff8f84c5e04e901b3d3fe1f59329594be03b0ec16", size = 19284188, upload-time = "2026-08-15T18:30:55.733Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/52/e5/73899e55412ba57bab19811c41ac3c4e9b9d83a7c88ff9911a4edded2451/minimol_onnx-0.1.1-py3-none-any.whl", hash = "sha256:56ec52189a8bbe8324168c3b8a38f16e3b839dd29ad022c58a7a337c58e5a587", size = 18688106, upload-time = "2026-08-15T18:30:52.999Z" },
 ]
 
 [[package]]
@@ -3721,6 +3799,26 @@ wheels = [
 ]
 
 [[package]]
+name = "torch-geometric"
+version = "2.8.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "fsspec" },
+    { name = "jinja2" },
+    { name = "numpy" },
+    { name = "psutil" },
+    { name = "pyparsing" },
+    { name = "requests" },
+    { name = "tqdm" },
+    { name = "xxhash" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c1/d7/f754447893b8d275d479ffbce36e35d873b3df906eb380d810d239ffe66a/torch_geometric-2.8.1.tar.gz", hash = "sha256:3d4431567fcf4865a29cfec25c52484382dd38fd46a45fb4f9d473545d64b812", size = 929429, upload-time = "2026-10-12T11:47:39.023Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7c/24/486ae77b41d129b6a5035dd9f028141ec8d520c210a0c3fb803434f18b5f/torch_geometric-2.8.1-py3-none-any.whl", hash = "sha256:b628de243c0893f3435b6eca9a7bbc07f3219293ed27c974b8929aaae42e65d0", size = 1325471, upload-time = "2026-10-12T11:47:35.803Z" },
+]
+
+[[package]]
 name = "torchmetrics"
 version = "1.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3899,6 +3997,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/2d/8c/2692555c838db37fb56cc0cfd51c27367af7bc13f3489bec427b7475d4e0/widgetsnbextension-3.6.10.tar.gz", hash = "sha256:cc370876baee1d23d4c506c798ab7d08c355133c9a5e81474159ff75877593df", size = 783481, upload-time = "2024-10-22T08:13:01.013Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/93/1b/25d570ee8dce0f2ddadb967d6242cf6e10516db7897c7d9a6e3853b56bfc/widgetsnbextension-3.6.10-py2.py3-none-any.whl", hash = "sha256:91a283c2bb50b43ae415dfe69fb026ece0c14e0102987fb53127c7a71e82417d", size = 1556860, upload-time = "2024-10-22T08:12:57.753Z" },
+]
+
+[[package]]
+name = "win32-setctime"
+version = "1.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b3/8f/705086c9d734d3b663af0e9bb3d4de6578d08f46b1b101c2442fd9aecaa2/win32_setctime-1.2.0.tar.gz", hash = "sha256:ae1fdf948f5640aae05c511ade119313fb6a30d7eabe25fef9764dca5873c4c0", size = 4867, upload-time = "2024-12-07T15:28:28.314Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e1/07/c6fe3ad3e685340704d314d765b7912993bcb8dc198f0e7a89382d37974b/win32_setctime-1.2.0-py3-none-any.whl", hash = "sha256:95d644c4e708aba81dc3704a116d8cbc974d70b3bdb8be1d150e36be6e9d1390", size = 4083, upload-time = "2024-12-07T15:28:26.465Z" },
 ]
 
 [[package]]

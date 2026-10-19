@@ -183,7 +183,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path, required=True, help="Output joblib path")
     parser.add_argument(
         "--representation",
-        choices=("rdkit2d", "chemeleon"),
+        choices=("rdkit2d", "chemeleon", "minimol"),
         required=True,
         help="Feature representation used for training",
     )

@@ -10,11 +10,11 @@ instead of chasing one optimal solution.  While diverse, in a real chemical spac
 - **Scoring:** a **TabPFN v3.5** classifier trained on the public
   [GNEtolC](https://github.com/Genentech/gneprop) dataset predicts P(active). This functions as the reward for our  search, therefore, molecules are only as good as the model and data that were used to train.
   The activity representation is selected in `config.toml` with
-  `activity.representation`: `rdkit2d` or `chemeleon`. Model performance
+  `activity.representation`: `rdkit2d`, `chemeleon` or `minimol`. Model performance
   metrics and evaluation are private for now, and will be added in future updates.
 - **Behavior space:** These will be the primary drivers for the notion of diversity in the search. They are not guaranteed to accurately reflect _structural_ diversity, as diverisity in this case are in the terms of the dimension itself. For now, any combination of the dimensions are available:
   `logp`, `tpsa`, `mw`, `fsp3`, `num_rotb`, `num_rings`, `balabanj`,
-  `vsa_estate2`, `bcut2d_logplow`. 
+  `vsa_estate2`, `bcut2d_logplow`, `max_partial_charge`.
   For now, the ranges are set from the observed support of the training actives, so no resolution is spent on empty space, and a cell is only replaced by a better-scoring molecule rather than by a different one.
 
 Most generation parameters can be easily changed in `config.toml`
@@ -50,12 +50,23 @@ python scripts/train_tabpfn.py \
   --features-dir /path/to/GNEtolC/chemeleon \
   --out data/predictor/tabpfn_chemeleon.joblib \
   --representation chemeleon
+python scripts/train_tabpfn.py \
+  --csv data/predictor/predictor_training_data.csv \
+  --out data/predictor/tabpfn_minimol.joblib \
+  --representation minimol
 python scripts/fit_latent_pca.py
 ```
 
-The trained GNEtolC models are `data/predictor/tabpfn_rdkit2d.joblib` and
-`data/predictor/tabpfn_chemeleon.joblib`. CheMeleon inference requires the
-`chemprop` dependency and its checkpoint, downloaded on first use.
+The trained GNEtolC models are `data/predictor/tabpfn_rdkit2d.joblib`,
+`data/predictor/tabpfn_chemeleon.joblib` and `data/predictor/tabpfn_minimol.joblib`.
+CheMeleon inference requires the `chemprop` dependency and its checkpoint,
+downloaded on first use.
+
+MiniMol runs in EVA's own environment through `minimol-onnx`: the graph is
+frozen to ONNX and the Graphium featurizer is vendored as pure Python, so no
+separate interpreter or PyG build is needed. `datamol` is pinned to 0.12.5
+because 0.13+ requires rdkit ≥ 2024.9.1. If the featurizer environment changes,
+retrain `tabpfn_minimol.joblib` — eigenvector signs are LAPACK-specific.
 
 ## Run
 
