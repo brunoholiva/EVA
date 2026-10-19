@@ -47,6 +47,46 @@ class TensorBoardLogger:
         config_dict = asdict(config)
         config_json = json.dumps(config_dict, indent=2, default=str)
         self._writer.add_text("config/full", config_json)
+        if config.run.hypothesis:
+            self._writer.add_text("experiment/hypothesis", config.run.hypothesis)
+
+    def log_benchmark_metrics(
+        self,
+        metrics: dict,
+        oracle_calls: int,
+        elapsed_s: float,
+        restarts: list[int] | None = None,
+    ) -> None:
+        """Log benchmark per-step metrics to TensorBoard.
+
+        The x-axis is cumulative oracle calls, keeping curves comparable
+        across generators with different batch sizes.
+
+        Parameters
+        ----------
+        metrics : dict
+            Metric name to value mapping from the benchmark accumulator.
+        oracle_calls : int
+            Cumulative oracle calls so far (x-axis value).
+        elapsed_s : float
+            Wall-clock seconds since the benchmark started.
+        restarts : list of int or None
+            Per-emitter cumulative restart counts, or ``None`` when the
+            generator tracks no restarts.
+        """
+        if self._writer is None:
+            return
+        for name, value in metrics.items():
+            self._writer.add_scalar(f"benchmark/{name}", value, oracle_calls)
+        self._writer.add_scalar("benchmark/elapsed_s", elapsed_s, oracle_calls)
+        if restarts is not None:
+            self._writer.add_scalar(
+                "benchmark/n_restarts", int(sum(restarts)), oracle_calls
+            )
+            for i, count in enumerate(restarts):
+                self._writer.add_scalar(
+                    f"benchmark/emitter/{i}/restarts", int(count), oracle_calls
+                )
 
     def log_generation(
         self,
