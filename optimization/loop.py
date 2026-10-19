@@ -109,23 +109,38 @@ def build_scheduler(
 
     for i in range(emitter_cfg.n_emitters):
         rng = np.random.default_rng(seed + i)
-        x0 = rng.standard_normal(archive_cfg.solution_dim).astype(np.float64)
+        if emitter_cfg.mixed_restarts:
+            x0 = rng.standard_normal(archive_cfg.solution_dim).astype(np.float64)
 
-        emitter = _MixedRestartEmitter(
-            archive=archive,
-            ranker="imp",
-            es="cma_es",
-            selection_rule="mu",
-            restart_rule=emitter_cfg.restart_every,
-            x0=x0,
-            sigma0=emitter_cfg.sigma0,
-            bounds=[(-emitter_cfg.bounds, emitter_cfg.bounds)]
-            * archive_cfg.solution_dim,
-            batch_size=emitter_cfg.batch_size,
-            seed=seed + i,
-            random_restart=i < n_random,
-            restart_seed=seed + 10_000 + i,
-        )
+            emitter = _MixedRestartEmitter(
+                archive=archive,
+                ranker=emitter_cfg.ranker,
+                es="cma_es",
+                selection_rule="mu",
+                restart_rule=emitter_cfg.restart_every,
+                x0=x0,
+                sigma0=emitter_cfg.sigma0,
+                bounds=[(-emitter_cfg.bounds, emitter_cfg.bounds)]
+                * archive_cfg.solution_dim,
+                batch_size=emitter_cfg.batch_size,
+                seed=seed + i,
+                random_restart=i < n_random,
+                restart_seed=seed + 10_000 + i,
+            )
+        else:
+            emitter = EvolutionStrategyEmitter(
+                archive=archive,
+                x0=np.zeros(archive_cfg.solution_dim),
+                sigma0=emitter_cfg.sigma0,
+                ranker=emitter_cfg.ranker,
+                es="cma_es",
+                selection_rule="mu",
+                restart_rule=emitter_cfg.restart_rule,
+                bounds=[(-emitter_cfg.bounds, emitter_cfg.bounds)]
+                * archive_cfg.solution_dim,
+                batch_size=emitter_cfg.batch_size,
+                seed=seed + i,
+            )
         emitters.append(emitter)
 
     return Scheduler(archive, emitters, result_archive)

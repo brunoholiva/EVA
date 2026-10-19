@@ -49,8 +49,9 @@ class EmitterConfig:
     bounds: float = 3.0
     restart_every: int = 50
     n_keeper_emitters: int = 4
-    # Kept for loading older configs; mixed restarts use restart_every.
+    mixed_restarts: bool = True
     restart_rule: int | str = "basic"
+    ranker: str = "imp"
 
 
 @dataclass
@@ -81,6 +82,7 @@ class RunConfig:
     eval_every: int
     seed: int
     resume_from: str
+    hypothesis: str | None = None
 
 
 @dataclass
