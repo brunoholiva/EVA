@@ -42,9 +42,7 @@ def _ensure_cuda_compat() -> None:
         os.environ["PYTORCH_CUDA_ALLOC_CONF"] = f"{conf},{extra}" if conf else extra
 
 
-def load_model(
-    path: Path, device: str = "cpu", softmax_temperature: float | None = None
-) -> TabPFNClassifier:
+def load_model(path: Path, device: str = "cpu") -> TabPFNClassifier:
     """Load a saved TabPFN classifier and optionally move it to *device*.
 
     Parameters
@@ -53,21 +51,9 @@ def load_model(
         Path to the joblib-saved model.
     device : str, default="cpu"
         Target device (``"cpu"`` or ``"cuda"``).
-    softmax_temperature : float or None, default=None
-        If provided, override the fitted ``softmax_temperature_`` attribute.
-        This controls the sharpness of predicted probabilities at inference
-        time without re-training.
-
-    Notes
-    -----
-    Setting ``softmax_temperature`` only updates the fitted attribute
-    (``softmax_temperature_``) used during prediction.  The constructor
-    attribute (``softmax_temperature``) is left unchanged.
     """
     model: TabPFNClassifier = load(path)
     model.inference_precision = "autocast"
-    if softmax_temperature is not None:
-        model.softmax_temperature_ = softmax_temperature
     if device != "cpu":
         _ensure_cuda_compat()
         move_model_to_device(model, device)

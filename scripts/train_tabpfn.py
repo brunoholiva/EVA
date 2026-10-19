@@ -32,8 +32,6 @@ from reporting.console import detail, saved, section, step
 
 suppress_rdkit_logs()
 
-SOFTMAX_TEMPERATURE: float = 2.0
-
 
 def load_data(csv_path: Path) -> tuple[list[str], np.ndarray]:
     """Load SMILES and binary targets from a CSV file.
@@ -97,7 +95,6 @@ def train_model(X: np.ndarray, y: np.ndarray) -> TabPFNClassifier:
     """
     model = TabPFNClassifier.create_default_for_version(
         ModelVersion.V3_5,
-        softmax_temperature=SOFTMAX_TEMPERATURE,
         device="cuda",
         random_state=42,
         fit_mode="fit_with_cache",
@@ -153,11 +150,7 @@ def train_one(
     )
     detail(f"Feature matrix shape: {X.shape}")
 
-    step(
-        f"Training TabPFN v3.5 ({representation}, "
-        f"softmax_temperature={SOFTMAX_TEMPERATURE}, "
-        f"fit_mode=fit_with_cache) ..."
-    )
+    step(f"Training TabPFN v3.5 ({representation}, fit_mode=fit_with_cache) ...")
     t0 = time.perf_counter()
     model = train_model(X, y)
     elapsed = time.perf_counter() - t0

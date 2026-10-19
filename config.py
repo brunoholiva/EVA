@@ -70,7 +70,6 @@ class ActivityConfig:
 
     model_path: str
     device: str
-    softmax_temperature: float
     representation: str = "rdkit2d"
 
 

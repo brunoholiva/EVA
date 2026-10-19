@@ -63,7 +63,6 @@ def load_activity_oracle(cfg: ExperimentConfig):
     tabpfn = load_tabpfn(
         path=cfg.activity.model_path,
         device=cfg.activity.device,
-        softmax_temperature=cfg.activity.softmax_temperature,
     )
     featurizer = make_activity_featurizer(
         cfg.activity.representation, device=cfg.activity.device
