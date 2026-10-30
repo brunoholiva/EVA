@@ -12,9 +12,7 @@ def test_standard_emitter_mode_uses_pyribs_emitter() -> None:
     archive = ArchiveConfig(
         solution_dim=2,
         dimensions=[
-            DimensionConfig(
-                name="max_partial_charge", resolution=2, range=(0.0, 1.0)
-            )
+            DimensionConfig(name="max_partial_charge", resolution=2, range=(0.0, 1.0))
         ],
         learning_rate=0.01,
         threshold_min=0.0,

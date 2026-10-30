@@ -13,7 +13,8 @@ def generic_scaffold_hash(smiles: str) -> str:
 
     Uses ``GetScaffoldForMol`` then ``MakeScaffoldGeneric`` to collapse
     functional-group differences.
-    Acyclic molecules return ``"acyclic"``; parse failures return ``"invalid"``.
+    Acyclic molecules return ``"acyclic"``; parse or scaffold failures return
+    ``"invalid"``.
 
     Parameters
     ----------
@@ -28,7 +29,11 @@ def generic_scaffold_hash(smiles: str) -> str:
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return "invalid"
-    scaffold = GetScaffoldForMol(mol)
+    try:
+        scaffold = GetScaffoldForMol(mol)
+    except Exception:
+        # RDKit raises AtomValenceException on organometallic valences.
+        return "invalid"
     if not scaffold or not scaffold.GetRingInfo().NumRings():
         return "acyclic"
     generic = Chem.MolToSmiles(scaffold)
