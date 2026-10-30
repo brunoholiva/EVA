@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from config import ArchiveConfig
-from evaluation.evaluator import Evaluator
+from evaluation.evaluator import INVALID_MOLECULE_OBJECTIVE, Evaluator
 
 
 class _Featurizer:
@@ -27,20 +26,14 @@ class _Activity:
         return (p > 0.5).astype(int), np.stack([1 - p, p], axis=1)
 
 
-def _evaluator(seed_decode=None, dimensions=None):
-    cfg = ArchiveConfig(
-        solution_dim=2,
-        dimensions=dimensions or [],
-        learning_rate=0.01,
-        threshold_min=0.1,
-    )
+def _evaluator(seed_decode=None, seen_smiles=None):
     activity = _Activity()
     ev = Evaluator(
         decode=seed_decode or (lambda z: []),
         activity=activity,
         activity_model=None,
         featurizer=_Featurizer(),
-        archive_cfg=cfg,
+        seen_smiles=seen_smiles,
     )
     return ev, activity
 
@@ -52,12 +45,15 @@ class TestOracleAccounting:
         assert r.n_oracle_calls == 2
         assert activity.calls == 1
 
-    def test_duplicates_are_valid_but_not_scored(self):
+    def test_duplicates_are_valid_but_penalized_and_not_scored(self):
         ev, _ = _evaluator()
         r = ev.evaluate_smiles(["CCO", "CCO"])
         assert r.n_valid == 2
         assert r.n_duplicates == 1
         assert r.n_oracle_calls == 1
+        assert r.objectives[0] > 0.0
+        assert r.objectives[1] == INVALID_MOLECULE_OBJECTIVE
+        assert r.p_active[1] == 0.0
 
     def test_invalid_is_not_valid_and_not_scored(self):
         ev, _ = _evaluator()
@@ -66,13 +62,18 @@ class TestOracleAccounting:
         assert r.n_duplicates == 0
         assert r.n_oracle_calls == 0
 
-    def test_seen_set_persists_across_calls(self):
+    def test_seen_set_persists_across_calls_and_restores(self):
         ev, _ = _evaluator()
         first = ev.evaluate_smiles(["CCO"])
         second = ev.evaluate_smiles(["CCO"])
         assert first.n_oracle_calls == 1
         assert second.n_oracle_calls == 0
         assert second.n_duplicates == 1
+
+        ev_restored, _ = _evaluator(seen_smiles=ev.seen_smiles)
+        third = ev_restored.evaluate_smiles(["CCO", "CCN"])
+        assert third.n_oracle_calls == 1
+        assert third.n_duplicates == 1
 
     def test_oracle_calls_never_exceed_attempts(self):
         ev, _ = _evaluator()

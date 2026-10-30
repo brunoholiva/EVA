@@ -6,7 +6,7 @@ transform for use by ``ProjectedVAE`` in the main pipeline.
 
 Usage
 -----
-    micromamba run -n eva python scripts/fit_latent_pca.py
+    uv run python scripts/fit_latent_pca.py
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ RANDOM_SEED = 42
 
 
 def main() -> None:
+    """Encode training molecules and fit a whitened PCA transform."""
     section("Fitting PCA on VAE latent space")
 
     vae = ChemBedVAE(device="cuda")

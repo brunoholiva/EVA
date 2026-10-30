@@ -1,13 +1,13 @@
-"""Train a TabPFN v3.5 classifier on a binary classification dataset.
+r"""Train a TabPFN v3.5 classifier on a binary classification dataset.
 
 The representation must match the model used by EVA at inference time.
 
 Usage::
 
-    micromamba run -n eva2 python scripts/train_tabpfn.py \\
-        --features-dir /path/to/brood/data/features/GNEtolC/rdkit2d \\
-        --out data/predictor/tabpfn_rdkit2d.joblib \\
-        --representation rdkit2d
+    uv run python scripts/train_tabpfn.py \
+        --csv data/predictor/predictor_training_data.csv \
+        --out data/predictor/tabpfn_minimol.joblib \
+        --representation minimol
 """
 
 from __future__ import annotations
@@ -106,10 +106,9 @@ def train_model(X: np.ndarray, y: np.ndarray) -> TabPFNClassifier:
 
 def train_one(
     out_path: Path,
-    representation: str,
+    representation: str = "minimol",
     csv_path: Path | None = None,
     features_dir: Path | None = None,
-    n_jobs: int = -1,
 ) -> None:
     """Train a TabPFN model on a single dataset and save it.
 
@@ -117,16 +116,16 @@ def train_one(
     ----------
     out_path : Path
         Output path for the joblib model artifact.
+    representation : str, default="minimol"
+        Feature representation used for training.
     csv_path : Path or None
         Path to training CSV (``SMILES``, ``target`` columns).
     features_dir : Path or None
-        Brood feature cache containing ``X_train.npy`` and ``y_train.npy``.
-    n_jobs : int, default=-1
-        Parallel workers for featurisation.
+        Feature cache directory containing ``X_train.npy`` and ``y_train.npy``.
     """
     if features_dir is not None:
         section(f"Training TabPFN on cached {representation} features")
-        step(f"Loading {features_dir} ...")
+        step(f"Loading {features_dir}")
         X = np.load(features_dir / "X_train.npy")
         y = np.load(features_dir / "y_train.npy")
         n_samples = len(y)
@@ -134,12 +133,10 @@ def train_one(
         if csv_path is None:
             raise ValueError("Provide csv_path or features_dir")
         section(f"Training TabPFN on {csv_path.name}")
-        step(f"Loading {csv_path} ...")
+        step(f"Loading {csv_path}")
         smiles, y = load_data(csv_path)
-        featurizer = make_activity_featurizer(
-            representation, n_jobs=n_jobs, device="cuda"
-        )
-        step(f"Computing {representation} features ...")
+        featurizer = make_activity_featurizer(representation)
+        step(f"Computing {representation} features")
         X = featurizer.transform(smiles)
         n_samples = len(smiles)
 
@@ -150,13 +147,13 @@ def train_one(
     )
     detail(f"Feature matrix shape: {X.shape}")
 
-    step(f"Training TabPFN v3.5 ({representation}, fit_mode=fit_with_cache) ...")
+    step(f"Training TabPFN v3.5 ({representation}, fit_mode=fit_with_cache)")
     t0 = time.perf_counter()
     model = train_model(X, y)
     elapsed = time.perf_counter() - t0
     detail(f"Training completed in {elapsed:.1f}s")
 
-    step("Moving model to CPU (including KV-cache) ...")
+    step("Moving model to CPU (including KV-cache)")
     move_model_to_device(model, "cpu")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -165,23 +162,21 @@ def train_one(
 
 
 def main() -> None:
+    """Parse CLI arguments and train a TabPFN classifier."""
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--csv", type=Path, help="Training CSV")
     source.add_argument(
         "--features-dir",
         type=Path,
-        help="Brood feature cache containing X_train.npy and y_train.npy",
+        help="Feature cache containing X_train.npy and y_train.npy",
     )
     parser.add_argument("--out", type=Path, required=True, help="Output joblib path")
     parser.add_argument(
         "--representation",
-        choices=("rdkit2d", "chemeleon", "minimol"),
-        required=True,
-        help="Feature representation used for training",
-    )
-    parser.add_argument(
-        "--n_jobs", type=int, default=-1, help="Parallel workers for featurisation"
+        choices=("minimol",),
+        default="minimol",
+        help="Feature representation used for training (default: minimol)",
     )
     args = parser.parse_args()
 
@@ -190,7 +185,6 @@ def main() -> None:
         args.representation,
         csv_path=args.csv,
         features_dir=args.features_dir,
-        n_jobs=args.n_jobs,
     )
 
 

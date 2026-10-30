@@ -3,74 +3,54 @@
 from __future__ import annotations
 
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
 import numpy as np
 
-from chemistry.molecules import ParsedMolecules
 from chemistry.smiles import parse_and_canonical_batch
-from evaluation.dimensions import compute_dimension
 from logs import suppress_joblib_warnings
 
 suppress_joblib_warnings()
 
 INVALID_MOLECULE_OBJECTIVE: float = -1.0
-"""Objective value assigned to candidates that cannot be decoded or scored.
+"""Objective value assigned to invalid or duplicate candidates.
 
-Since pyribs maximises objectives, a value below ``threshold_min`` ensures
-invalid molecules are never inserted into the archive.
+Valid first-seen molecules receive ``P(active)`` in ``[0, 1]``. Assigning
+``-1.0`` to chemically invalid or already-seen canonical SMILES ranks them
+strictly below all novel valid molecules without consuming oracle calls.
 """
-
-
-if TYPE_CHECKING:
-    from config import ArchiveConfig
 
 
 @dataclass
 class EvalTimings:
-    """Per-generation timing breakdown."""
+    """Per-step timing breakdown in seconds."""
 
     decode: float = 0.0
     validity: float = 0.0
     featurize_predict: float = 0.0
-    cpu_scorers: float = 0.0
     assemble: float = 0.0
-    archive_ops: float = 0.0
+    solver_ops: float = 0.0
 
 
 @dataclass
 class EvalResult:
-    """Result of scoring a single generation of candidates."""
+    """Result of scoring a single batch of candidate molecules."""
 
     smiles: list[str]
     objectives: np.ndarray
-    measures: np.ndarray
     p_active: np.ndarray
     n_valid: int
     gen_time: float
     timings: EvalTimings = field(default_factory=EvalTimings)
     n_duplicates: int = 0
     n_oracle_calls: int = 0
-    """Candidates actually sent to the predictor.
-
-    Counts first-seen chemically valid canonical SMILES, i.e. the number of
-    ``predict_proba`` invocations. A molecule is charged even if a behaviour
-    descriptor later turns out non-finite, since the predictor already ran.
-    ``n_valid`` is *not* a substitute: it also counts valid duplicates, which
-    are never scored.
-    """
+    """First-seen chemically valid canonical SMILES sent to TabPFN."""
     canonical: list[str | None] | None = None
-    """Canonical SMILES per attempt; ``None`` for chemically invalid ones.
-
-    Already computed for deduplication, so exposing it avoids a second RDKit
-    pass when writing per-attempt logs.
-    """
+    """Canonical SMILES per attempt; ``None`` for chemically invalid ones."""
 
 
 class Evaluator:
-    """Decode latent vectors and score them on all objectives.
+    """Decode latent vectors and score novel valid SMILES with TabPFN.
 
     Parameters
     ----------
@@ -82,10 +62,10 @@ class Evaluator:
         pre-featurized features (``predict_from_features``).
     activity_model : fitted TabPFNClassifier
         Activity predictor.
-    featurizer : MoleculeFeaturizer
+    featurizer : MinimolFeaturizer
         Feature transform matching the TabPFN training config.
-    archive_cfg : ArchiveConfig
-        Archive dimension configuration (names, enabled flags).
+    seen_smiles : set of str or None, default=None
+        Optional initial deduplication set (e.g. restored from a checkpoint).
     """
 
     def __init__(
@@ -94,27 +74,26 @@ class Evaluator:
         activity,
         activity_model,
         featurizer,
-        archive_cfg: ArchiveConfig,
+        seen_smiles: set[str] | None = None,
     ) -> None:
         self._decode_fn = decode
         self._activity_fn = activity
         self._activity_model = activity_model
         self._featurizer = featurizer
-        self._archive_cfg = archive_cfg
-        self._n_measures = len(archive_cfg.dimensions)
-        self._seen_smiles: set[str] = set()
+        self._seen_smiles: set[str] = set(seen_smiles) if seen_smiles else set()
 
     @property
     def decode_fn(self):
         """Return the latent-vector decoder used by this evaluator."""
         return self._decode_fn
 
-    def __call__(self, z: np.ndarray) -> EvalResult:
-        """Score a batch of latent vectors.
+    @property
+    def seen_smiles(self) -> set[str]:
+        """Return the set of canonical SMILES already scored by the oracle."""
+        return self._seen_smiles
 
-        Thin wrapper that decodes *z* to SMILES and delegates to
-        :meth:`evaluate_smiles`. Dedup state is shared, so mixing calls of both
-        kinds is safe.
+    def __call__(self, z: np.ndarray) -> EvalResult:
+        """Decode latent batch *z* to SMILES and evaluate.
 
         Parameters
         ----------
@@ -124,7 +103,7 @@ class Evaluator:
         Returns
         -------
         EvalResult
-            Objectives (P(active)), behavior coords, and metadata.
+            Objectives, ``P(active)`` scores, canonical SMILES, and counters.
         """
         t1 = time.time()
         smiles_list = self._decode_fn(z)
@@ -138,20 +117,19 @@ class Evaluator:
     def evaluate_smiles(self, smiles_list: list[str]) -> EvalResult:
         """Score a batch of SMILES strings.
 
-        Duplicate molecules (same canonical SMILES seen before) are
-        skipped — they receive ``INVALID_MOLECULE_OBJECTIVE`` and zero
-        measures, avoiding redundant featurization, prediction, and
-        dimension scoring.
+        Duplicate molecules (same canonical SMILES seen before) are skipped —
+        they receive ``INVALID_MOLECULE_OBJECTIVE`` (``-1.0``) and zero
+        ``p_active``, avoiding redundant featurization and oracle calls.
 
         Parameters
         ----------
         smiles_list : list of str
-            Candidate SMILES, from any generator.
+            Candidate SMILES from any generator.
 
         Returns
         -------
         EvalResult
-            Objectives (P(active)), behavior coords, and metadata.
+            Objectives, ``P(active)`` scores, canonical SMILES, and counters.
         """
         timings = EvalTimings()
         t0 = time.time()
@@ -162,16 +140,13 @@ class Evaluator:
         timings.validity = time.time() - t1
 
         new_mask = _dedup_mask(canonical, valid_mask, self._seen_smiles)
-
         scored_positions = np.flatnonzero(new_mask)
         valid_smiles = [smiles_list[i] for i in scored_positions]
 
-        scores = self._score_valid(valid_smiles, timings)
+        pa = self._score_valid(valid_smiles, timings)
 
         t1 = time.time()
-        result = self._assemble(
-            n, valid_mask, new_mask, smiles_list, canonical, scores
-        )
+        result = self._assemble(n, valid_mask, new_mask, smiles_list, canonical, pa)
         timings.assemble = time.time() - t1
 
         result.gen_time = time.time() - t0
@@ -180,65 +155,17 @@ class Evaluator:
 
     def _score_valid(
         self, valid_smiles: list[str], timings: EvalTimings
-    ) -> _ScoreBundle | None:
-        """Score valid SMILES with all scorers."""
+    ) -> np.ndarray | None:
+        """Featurize and score first-seen valid SMILES."""
         if not valid_smiles:
             return None
 
         t1 = time.time()
-
         X = self._featurizer.transform(valid_smiles)
+        _, probs = self._activity_fn(X, self._activity_model)
+        pa = probs[:, 1].astype(np.float64)
         timings.featurize_predict = time.time() - t1
-
-        t1 = time.time()
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            cpu_future = pool.submit(self._compute_cpu_scores, valid_smiles)
-
-            _, probs = self._activity_fn(X, self._activity_model)
-            pa = probs[:, 1].astype(np.float64)
-
-            dim_scores = cpu_future.result()
-
-        timings.cpu_scorers = time.time() - t1
-
-        return _ScoreBundle(dim_scores=dim_scores, pa=pa)
-
-    def _compute_cpu_scores(self, valid_smiles: list[str]) -> dict[str, np.ndarray]:
-        """Compute CPU-bound molecular scores for valid SMILES.
-
-        Parses molecules once, then computes only the enabled dimensions.
-        Fingerprints are lazily computed only if needed by max_tanimoto.
-        Scaffold-based dimensions use Murcko scaffold SMILES instead.
-
-        Parameters
-        ----------
-        valid_smiles : list of str
-            SMILES strings known to be chemically valid.
-
-        Returns
-        -------
-        dict of str to np.ndarray
-            Dictionary mapping dimension names to computed values.
-        """
-        parsed = ParsedMolecules(valid_smiles)
-        dim_configs = {d.name: d for d in self._archive_cfg.dimensions}
-
-        dim_scores = {}
-        for dim_name in self._archive_cfg.active_dimension_names():
-            use_scaffold = dim_configs[dim_name].scaffold
-
-            if use_scaffold:
-                scaffold_smiles = [
-                    s if s is not None else smi
-                    for s, smi in zip(parsed.scaffold_smiles, valid_smiles)
-                ]
-                compute_parsed = ParsedMolecules(scaffold_smiles)
-            else:
-                compute_parsed = parsed
-
-            dim_scores[dim_name] = compute_dimension(dim_name, compute_parsed)
-
-        return dim_scores
+        return pa
 
     def _assemble(
         self,
@@ -247,40 +174,24 @@ class Evaluator:
         new_mask: np.ndarray,
         smiles_list: list[str],
         canonical: list[str | None],
-        scores: _ScoreBundle | None,
+        pa: np.ndarray | None,
     ) -> EvalResult:
-        """Map per-molecule scores back to the full candidate array.
-
-        Molecules are placed at positions indicated by *new_mask*.
-        Valid-but-duplicate molecules (``valid_mask & ~new_mask``) receive
-        ``INVALID_MOLECULE_OBJECTIVE`` and zero measures, matching the
-        behaviour of chemically invalid molecules.
-        """
+        """Map per-molecule scores back to the full candidate array."""
         objectives = np.full(n, INVALID_MOLECULE_OBJECTIVE, dtype=np.float64)
-        measures = np.zeros((n, self._n_measures), dtype=np.float64)
         p_active = np.zeros(n, dtype=np.float64)
 
         scored_positions = np.flatnonzero(new_mask)
-        if scores is not None and len(scored_positions) > 0:
-            objectives[scored_positions] = scores.pa
-            p_active[scored_positions] = scores.pa
-
-            for k, dim_name in enumerate(self._archive_cfg.active_dimension_names()):
-                measures[scored_positions, k] = scores.dim_scores[dim_name]
-
-            non_finite = ~np.isfinite(measures[scored_positions]).all(axis=1)
-            if non_finite.any():
-                bad_idx = scored_positions[non_finite]
-                objectives[bad_idx] = INVALID_MOLECULE_OBJECTIVE
-                p_active[bad_idx] = 0.0
-                measures[bad_idx] = 0.0
+        if pa is not None and len(scored_positions) > 0:
+            finite = np.isfinite(pa)
+            good_idx = scored_positions[finite]
+            objectives[good_idx] = pa[finite]
+            p_active[good_idx] = pa[finite]
 
         n_duplicates = int((valid_mask & ~new_mask).sum())
 
         return EvalResult(
             smiles=smiles_list,
             objectives=objectives,
-            measures=measures,
             p_active=p_active,
             n_valid=int(valid_mask.sum()),
             gen_time=0.0,
@@ -288,14 +199,6 @@ class Evaluator:
             n_oracle_calls=int(new_mask.sum()),
             canonical=list(canonical),
         )
-
-
-@dataclass
-class _ScoreBundle:
-    """Container for per-molecule scores from all scorers."""
-
-    dim_scores: dict[str, np.ndarray]
-    pa: np.ndarray
 
 
 def _dedup_mask(
