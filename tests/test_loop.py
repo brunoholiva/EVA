@@ -1,146 +1,158 @@
-"""Tests for the CMA-MAE optimization loop."""
+"""Tests for SearchLoop, checkpoint resume, and EVA single/multi-seed orchestration."""
 
 from __future__ import annotations
 
+import json
+from dataclasses import replace
+
 import numpy as np
-import pytest
-from ribs.archives import GridArchive
+import pandas as pd
 
-from evaluation.evaluator import INVALID_MOLECULE_OBJECTIVE, EvalResult
-from optimization.loop import CMAMAELoop
-
-SOLUTION_DIM = 2
-MEASURES = np.array([[0.1], [0.5], [0.9]])
-P_ACTIVE = np.array([0.9, 0.04, INVALID_MOLECULE_OBJECTIVE])
-
-
-class _StubScheduler:
-    """Minimal scheduler that records the archive objectives and ranking info."""
-
-    def __init__(self):
-        self.ask_rows = len(MEASURES)
-        # 10 bins so the measure rows land in distinct cells.
-        self.archive = GridArchive(
-            solution_dim=SOLUTION_DIM,
-            dims=[10],
-            ranges=[[0.0, 1.0]],
-            learning_rate=0.01,
-            threshold_min=0.1,
-        )
-        self.result_archive = GridArchive(
-            solution_dim=SOLUTION_DIM,
-            dims=[1],
-            ranges=[[0.0, 1.0]],
-            learning_rate=1.0,
-            threshold_min=0.0,
-        )
-        self.told: list[np.ndarray] = []
-        self.add_info: dict = {}
-        self._emitters: list = []
-        self._num_emitted = [len(MEASURES)]
-
-    def ask(self):
-        """Return one latent vector per measure row."""
-        return np.zeros((self.ask_rows, SOLUTION_DIM))
-
-    def tell(self, objectives, measures):
-        """Record the objectives received and the archive's ranking values."""
-        objectives = np.asarray(objectives)
-        self.told.append(np.array(objectives, dtype=np.float64))
-        self.add_info = self.archive.add(
-            solution=np.zeros((len(objectives), SOLUTION_DIM)),
-            objective=objectives,
-            measures=measures,
-        )
+from config import (
+    CMAConfig,
+    ExperimentConfig,
+    OutputConfig,
+    RunConfig,
+    TensorBoardConfig,
+)
+from EVA import run_single_seed
+from evaluation.evaluator import Evaluator
+from optimization.candidates import CandidateStore
+from optimization.cma import build_solver
+from optimization.loop import ATTEMPT_COLUMNS, CURVE_COLUMNS, SearchLoop
 
 
-def _run_loop(
-    objectives: np.ndarray,
-    threshold_min: float = 0.1,
-    scheduler: _StubScheduler | None = None,
-) -> tuple[_StubScheduler, CMAMAELoop]:
-    scheduler = scheduler or _StubScheduler()
-    result = EvalResult(
-        smiles=["a", "b", "c"],
-        objectives=objectives.copy(),
-        measures=MEASURES.copy(),
-        p_active=objectives.copy(),
-        n_valid=3,
-        gen_time=0.0,
+class _StubVAE:
+    """Deterministic decoder emitting unique alkane/ring SMILES + occasional duplicates/invalids."""
+
+    latent_dim = 4
+
+    def __init__(self) -> None:
+        self._counter = 0
+
+    def decode(self, z: np.ndarray) -> list[str]:
+        out: list[str] = []
+        for _ in range(len(z)):
+            idx = self._counter
+            self._counter += 1
+            if idx % 7 == 0:
+                out.append("INVALID_SMILES")
+            elif idx % 5 == 0:
+                out.append("c1ccccc1")  # repeated duplicate after first time
+            elif idx % 2 == 0:
+                n_c = (idx % 12) + 1
+                out.append("C" * n_c + "c1ccccc1")
+            else:
+                n_c = (idx % 15) + 1
+                out.append("C" * n_c + "O")
+        return out
+
+
+class _StubFeaturizer:
+    def transform(self, smiles: list[str]) -> np.ndarray:
+        return np.array([[len(s)] for s in smiles], dtype=np.float32)
+
+
+def _stub_predict(X: np.ndarray, model) -> tuple[np.ndarray, np.ndarray]:
+    # Deterministic P(active) in [0.2, 0.9] based on SMILES length
+    pa = np.clip(0.2 + 0.04 * X[:, 0], 0.0, 0.92)
+    return (pa >= 0.5).astype(int), np.stack([1.0 - pa, pa], axis=1)
+
+
+def test_search_loop_stops_on_oracle_budget_and_writes_csvs(tmp_path) -> None:
+    cfg = CMAConfig(n_populations=2, popsize=4, sigma0=0.5, bounds=3.0)
+    solver = build_solver("pycma", solution_dim=4, cfg=cfg, seed=1)
+    vae = _StubVAE()
+    ev = Evaluator(
+        decode=vae.decode,
+        activity=_stub_predict,
+        activity_model=None,
+        featurizer=_StubFeaturizer(),
     )
-    loop = CMAMAELoop(scheduler, evaluate=lambda z: result, threshold_min=threshold_min)
-    loop.run(n_generations=1)
-    return scheduler, loop
+    candidates = CandidateStore(hit_threshold=0.5)
+    loop = SearchLoop(solver, ev, candidates, solver_name="pycma", seed=1)
 
-
-def test_scheduler_receives_masked_objectives():
-    """Sub-threshold scores must reach the archive and emitters as invalid.
-
-    Masking is deliberate: ``ImprovementRanker`` ranks by
-    ``objective - cell_threshold``, so masked candidates in unexplored cells
-    outrank masked candidates in saturated ones. That steers CMA away from
-    exhausted regions of the behaviour map.
-    """
-    scheduler, _ = _run_loop(P_ACTIVE)
-    told = scheduler.told[0]
-
-    assert told[0] == 0.9
-    assert told[1] == INVALID_MOLECULE_OBJECTIVE
-    assert told[2] == INVALID_MOLECULE_OBJECTIVE
-
-
-def test_masked_rejects_rank_by_lowest_cell_threshold():
-    """Equally-invalid candidates rank by cell threshold, not by activity.
-
-    Guards the measured behaviour: feeding raw objectives instead cost a 5.4x
-    drop in ``p>0.7`` output over 350 generations (``test2_before_fix`` vs
-    ``test1_after_fix``, 147 -> 27 hits).
-    """
-    scheduler = _StubScheduler()
-    scheduler.ask_rows = 2
-    # Saturate the high cell so its threshold rises above threshold_min.
-    scheduler.archive.add(
-        solution=np.zeros((8, SOLUTION_DIM)),
-        objective=np.linspace(0.6, 0.9, 8),
-        measures=np.full((8, 1), 0.9),
+    summary = loop.run(
+        output_dir=tmp_path,
+        oracle_budget=15,
+        max_generations=0,
+        save_all_evaluations=True,
+        log_every=2,
     )
-    saturated_threshold = scheduler.archive.data()["threshold"].max()
 
-    masked = np.full(2, INVALID_MOLECULE_OBJECTIVE)
-    result = EvalResult(
-        smiles=["f", "g"],
-        objectives=masked.copy(),
-        measures=np.array([[0.1], [0.9]]),
-        p_active=masked.copy(),
-        n_valid=2,
-        gen_time=0.0,
+    assert summary["stopped_on"] == "oracle_budget"
+    assert summary["oracle_calls"] >= 15
+    assert (
+        summary["oracle_calls"]
+        + summary["duplicate_attempts"]
+        + summary["invalid_attempts"]
+        == summary["attempts"]
     )
-    loop = CMAMAELoop(scheduler, evaluate=lambda z: result, threshold_min=0.1)
-    loop.run(n_generations=1)
 
-    value = scheduler.add_info["value"]
-    assert saturated_threshold > 0.1
-    # The reject in the unexplored cell (index 0) outranks the one in the
-    # saturated cell (index 1), even though both objectives are identical.
-    assert value[0] > value[1]
-    assert value[0] == pytest.approx(INVALID_MOLECULE_OBJECTIVE - 0.1)
+    curve = pd.read_csv(tmp_path / "curve.csv")
+    assert list(curve.columns) == CURVE_COLUMNS
+    assert int(curve["oracle_calls"].iloc[-1]) == summary["oracle_calls"]
 
-
-def test_insertion_stats_still_count_the_accepted_molecule():
-    """Masking must not confuse the tracker about what the archive accepted."""
-    _, loop = _run_loop(P_ACTIVE)
-
-    assert loop.last_insertion_stats == {
-        "inserted_new": 1,
-        "improved_existing": 0,
-        "rejected": 2,
-    }
-    assert len(loop.archive) == 1
-    assert loop.archive.data()["objective"].max() == 0.9
+    attempts = pd.read_csv(tmp_path / "all_evaluations.csv")
+    assert list(attempts.columns) == ATTEMPT_COLUMNS
+    assert len(attempts) == summary["attempts"]
+    assert int(attempts["oracle_called"].sum()) == summary["oracle_calls"]
 
 
-def test_no_masking_when_threshold_is_zero():
-    """With ``threshold_min=0`` the raw objectives must pass through untouched."""
-    scheduler, _ = _run_loop(np.array([0.9, 0.04, 0.01]), threshold_min=0.0)
+def test_checkpoint_and_resume_appends_cleanly(tmp_path, monkeypatch) -> None:
+    import EVA
 
-    assert scheduler.told[0].tolist() == [0.9, 0.04, 0.01]
+    monkeypatch.setattr(EVA, "predict_from_features", _stub_predict)
+
+    vae = _StubVAE()
+    base_cfg = ExperimentConfig(
+        cma=CMAConfig(n_populations=2, popsize=4, sigma0=0.5, bounds=3.0),
+        run=RunConfig(
+            solver="pycma",
+            oracle_budget=0,
+            max_generations=2,
+            hit_threshold=0.5,
+            save_all_evaluations=True,
+            log_every=1,
+            seed=7,
+        ),
+        output=OutputConfig(output_dir=str(tmp_path), run_name="run1"),
+        tensorboard=TensorBoardConfig(enabled=False),
+        solution_dim=4,
+    )
+
+    out_dir = tmp_path / "run1"
+    s1 = run_single_seed(
+        base_cfg,
+        vae=vae,
+        tabpfn=None,
+        featurizer=_StubFeaturizer(),
+        output_dir=out_dir,
+    )
+    assert s1["steps"] == 2
+    assert (out_dir / "checkpoint.joblib").exists()
+    assert (out_dir / "candidates.csv").exists()
+
+    resumed_cfg = replace(
+        base_cfg,
+        run=replace(base_cfg.run, max_generations=4),
+    )
+    s2 = run_single_seed(
+        resumed_cfg,
+        vae=vae,
+        tabpfn=None,
+        featurizer=_StubFeaturizer(),
+        output_dir=out_dir,
+        resume_from=str(out_dir / "checkpoint.joblib"),
+    )
+    assert s2["steps"] == 4
+    assert s2["attempts"] == 32
+    assert s2["oracle_calls"] >= s1["oracle_calls"]
+
+    curve = pd.read_csv(out_dir / "curve.csv")
+    assert curve["step"].tolist() == [0, 1, 2, 3]
+    attempts = pd.read_csv(out_dir / "all_evaluations.csv")
+    assert len(attempts) == 32
+
+    saved_summary = json.loads((out_dir / "summary.json").read_text())
+    assert saved_summary["steps"] == 4

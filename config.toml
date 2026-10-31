@@ -1,30 +1,13 @@
-[archive]
-solution_dim = 256
-learning_rate = 0.01
-threshold_min = 0.6
-
-[[archive.dimensions]]
-name = "balabanj"
-resolution = 22
-range = [1.3, 2.9]
-scaffold = false
-
-[[archive.dimensions]]
-name = "fsp3"
-resolution = 22
-range = [0.0, 0.6]
-scaffold = false
-
-[emitter]
+[cma]
+n_populations = 15
+popsize = 36
 sigma0 = 0.5
-batch_size = 36
-n_emitters = 15
+init_std = 1.0
 bounds = 3.0
-restart_every = 100
-n_keeper_emitters = 0
-mixed_restarts = false
-restart_rule = 100
-ranker = "imp"
+max_gens_per_run = 0
+
+[cma.opts]
+# Optional direct passthrough to cma.CMAEvolutionStrategy (e.g. minstd = 0.25, CMA_diagonal = true)
 
 [generative]
 model_repo_id = "3BioCompBio/chembed-default"
@@ -32,31 +15,32 @@ device = "cuda"
 latent_dim = 256
 seed = 42
 
+[pca]
+path = "data/pca_latent.joblib"
+enabled = false
+
 [activity]
 model_path = "data/predictor/tabpfn_minimol.joblib"
 device = "cuda"
 representation = "minimol"
 
-[pca]
-path = "data/pca_latent.joblib"
-enabled = true
-
 [run]
-n_generations = 1000
-eval_every = 20
+solver = "pycma"
+oracle_budget = 100000
+max_generations = 0
+hit_threshold = 0.5
+save_all_evaluations = true
+log_every = 20
 seed = 42
 resume_from = ""
-hypothesis = "CMA-MAE with balabanj and fsp3 map with threshold_min = 0.6 and imp ranker"
+hypothesis = "15 independent pycma walkers in raw 256D ChemBed latent space"
 
 [output]
 output_dir = "results"
-run_name = "02_cmamae_balaban_fsp3_thresh06"
+run_name = "01_pycma_256d_baseline"
 
 [tensorboard]
 enabled = true
 log_dir = "tensorboard"
 scalar_every = 1
-histogram_every = 10
-figure_every = 3
 molecule_every = 10
-coverage_every = 1000

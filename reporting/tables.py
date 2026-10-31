@@ -1,163 +1,103 @@
-"""Console reporting for the CMA-MAE evolution loop."""
+"""Console tables for EVA search progress and final candidate summaries."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import Any
 
-import numpy as np
-from ribs.archives import GridArchive
-
+from evaluation.evaluator import EvalResult
+from optimization.candidates import CandidateStore
+from optimization.loop import StepSnapshot
 from reporting.console import console, make_table, section
 
-if TYPE_CHECKING:
-    from evaluation.evaluator import EvalResult
 
-
-def print_generation(
-    gen: int,
-    result: EvalResult,
-    archive: GridArchive,
-    result_archive: GridArchive | None = None,
-) -> None:
-    """Print a summary table for the current generation.
-
-    Parameters
-    ----------
-    gen : int
-        Generation index.
-    result : EvalResult
-        Scoring results for this generation.
-    archive : GridArchive
-        Primary archive state.
-    result_archive : GridArchive or None
-        Best-so-far archive; used for reporting if provided.
-    """
-    report = result_archive if result_archive is not None else archive
-
+def print_step(snapshot: StepSnapshot, oracle_budget: int = 0) -> None:
+    """Print a compact summary table for a completed step."""
     table = make_table(
-        f"Generation {gen}",
+        f"Step {snapshot.step}",
         [("Metric", "cyan"), ("Value", "magenta")],
     )
 
-    table.add_row("Valid candidates", str(result.n_valid))
-    table.add_row("Archive size", str(len(report)))
-    table.add_row("Best P(active)", _format_best_pa(result))
-    table.add_row("Mean P(active)", _format_mean_pa(result))
-
-    if len(report) > 0:
-        arch_data = report.data()
-        best_idx = np.argmax(arch_data["objective"])
-        table.add_row("Archive best obj", f"{arch_data['objective'][best_idx]:.4f}")
-
-    table.add_row("Gen time", f"{result.gen_time:.1f}s")
+    oracle_str = (
+        f"{snapshot.oracle_calls:,} / {oracle_budget:,}"
+        if oracle_budget > 0
+        else f"{snapshot.oracle_calls:,}"
+    )
+    table.add_row("Oracle calls", oracle_str)
+    table.add_row(
+        "Batch valid / dup",
+        f"{snapshot.result.n_valid} / {snapshot.result.n_duplicates}",
+    )
+    table.add_row("Batch best P(active)", _format_best_pa(snapshot.result))
+    table.add_row("Batch mean P(active)", _format_mean_pa(snapshot.result))
+    table.add_row("Best P(active)", f"{snapshot.best_p_active:.4f}")
+    table.add_row(
+        "Hits (>=0.5 / >=0.6 / >=0.8)",
+        f"{snapshot.n_hits_05:,} / {snapshot.n_hits_06:,} / {snapshot.n_hits_08:,}",
+    )
+    table.add_row("Unique scaffolds (>=0.6)", f"{snapshot.unique_scaffolds_06:,}")
+    if snapshot.walker_stats:
+        table.add_row("Walker spread", f"{snapshot.walker_spread:.3f}")
+        table.add_row("Total restarts", str(snapshot.total_restarts))
+    table.add_row("Step time", f"{snapshot.result.gen_time:.1f}s")
     console.print(table)
 
 
 def print_results(
-    archive: GridArchive,
-    decode_fn,
+    candidates: CandidateStore,
+    summary: dict[str, Any],
     top_n: int = 10,
-    result_archive: GridArchive | None = None,
-    dimension_names: list[str] | None = None,
 ) -> None:
-    """Print the final archive summary and top candidates.
-
-    Parameters
-    ----------
-    archive : GridArchive
-        Primary archive.
-    decode_fn : callable
-        Latent vectors → SMILES decoder.
-    top_n : int
-        Number of top candidates to display.
-    result_archive : GridArchive or None
-        Best-so-far archive; used for reporting if provided.
-    dimension_names : list of str or None
-        Names of enabled archive dimensions.
-    """
-    report = result_archive if result_archive is not None else archive
-
+    """Print final run summary and the top-ranked candidate molecules."""
     section("Results")
-    console.print(f"Archive size: {len(report)}")
+    console.print(
+        f"Oracle calls: {summary['oracle_calls']:,} "
+        f"({summary['attempts']:,} attempts, "
+        f"validity {summary['validity']:.1%}, "
+        f"stopped_on={summary['stopped_on']})"
+    )
+    console.print(
+        f"Hits >=0.5: {summary['n_hits_05']:,} | "
+        f"Hits >=0.6: {summary['n_hits_06']:,} | "
+        f"Hits >=0.8: {summary['n_hits_08']:,} | "
+        f"Unique scaffolds (>=0.6): {summary['unique_scaffolds_06']:,} "
+        f"(largest {summary['largest_scaffold_frac_06']:.1%})"
+    )
+    console.print(f"Best P(active): {summary['best_p_active']:.4f}")
 
-    if len(report) == 0:
+    top = candidates.ranked_records(top_n=top_n)
+    if not top:
         return
 
-    arch_data = report.data()
-    best_idx = np.argmax(arch_data["objective"])
-    console.print(f"Best P(active): {arch_data['objective'][best_idx]:.4f}")
-
-    order, _, smiles = _rank_archive(report, decode_fn, top_n)
-
-    if dimension_names is None:
-        dimension_names = [f"dim_{i}" for i in range(report.measure_dim)]
-
-    columns = [
-        ("Rank", "cyan"),
-        ("SMILES", "white"),
-        ("P(active)", "magenta"),
-    ]
-    for name in dimension_names:
-        columns.append((name, "yellow"))
-
-    table = make_table("Top Candidates", columns)
-
-    for rank, idx in enumerate(order, 1):
-        smi = smiles[rank - 1] if rank - 1 < len(smiles) else ""
-        row = [
+    table = make_table(
+        "Top Candidates",
+        [
+            ("Rank", "cyan"),
+            ("Canonical SMILES", "white"),
+            ("P(active)", "magenta"),
+            ("Generic Scaffold", "yellow"),
+            ("Walker", "green"),
+            ("Oracle #", "cyan"),
+        ],
+    )
+    for rank, rec in enumerate(top, start=1):
+        table.add_row(
             str(rank),
-            smi,
-            f"{arch_data['objective'][idx]:.4f}",
-        ]
-        for d in range(report.measure_dim):
-            row.append(f"{arch_data['measures'][idx][d]:.3f}")
-        table.add_row(*row)
+            rec.canonical_smiles,
+            f"{rec.p_active:.4f}",
+            rec.generic_scaffold,
+            str(rec.walker_id),
+            f"{rec.oracle_call:,}",
+        )
     console.print(table)
 
 
-def _rank_archive(
-    archive: GridArchive,
-    decode_fn,
-    top_n: int,
-) -> tuple[np.ndarray, np.ndarray, list[str]]:
-    """Sort archive by objective and decode the top solutions.
-
-    Parameters
-    ----------
-    archive : GridArchive
-        The archive to rank.
-    decode_fn : callable
-        Latent vectors → SMILES decoder.
-    top_n : int
-        Number of top candidates to return.
-
-    Returns
-    -------
-    order : np.ndarray
-        Indices into archive.data(), sorted by descending objective.
-    solutions : np.ndarray
-        Latent vectors for the top candidates.
-    smiles : list of str
-        Decoded SMILES for the top candidates.
-    """
-    arch_data = archive.data()
-    order = np.argsort(-arch_data["objective"])[:top_n]
-    solutions = np.array([arch_data["solution"][i] for i in order])
-    smiles = decode_fn(solutions)
-    return order, solutions, smiles
-
-
 def _format_best_pa(result: EvalResult) -> str:
-    """Format the best P(active) from a generation."""
-    if result.n_valid == 0:
-        return "N/A"
-    active = result.p_active[result.p_active > 0]
-    return f"{max(active):.4f}" if len(active) > 0 else "N/A"
+    """Format the highest first-seen ``P(active)`` in the batch."""
+    scored = result.p_active[result.p_active > 0]
+    return f"{float(scored.max()):.4f}" if len(scored) > 0 else "N/A"
 
 
 def _format_mean_pa(result: EvalResult) -> str:
-    """Format the mean P(active) from valid candidates."""
-    if result.n_valid == 0:
-        return "N/A"
-    active = result.p_active[result.p_active > 0]
-    return f"{active.mean():.4f}" if len(active) > 0 else "N/A"
+    """Format the mean first-seen ``P(active)`` in the batch."""
+    scored = result.p_active[result.p_active > 0]
+    return f"{float(scored.mean()):.4f}" if len(scored) > 0 else "N/A"

@@ -1,95 +1,109 @@
-# EVA - Evolution of Viable Antibiotics
+# EVA — Evolution of Viable Antibiotics
 
-Antibiotics are extremely diverse, and conventional optimization frequently
-exploits data and predictor-model biases. EVA uses quality-diversity search:
-molecules compete only within the same niche of a configurable behavior space,
-instead of chasing one optimal solution.  While diverse, in a real chemical space, antibiotics tend to cluster far apart from each other, so we need to balance exploration vs exploitation very carefully.
+Antibiotics span structurally distant chemical families, and single-population
+optimization frequently collapses onto one chemotype or exploits predictor biases.
+EVA searches the continuous learned latent space of the
+[ChemBed](https://link.springer.com/article/10.1186/s13321-026-01243-0) SELFIES
+Transformer VAE using multiple independent **CMA-ES** populations (`pycma`),
+scored by a **TabPFN v3.5** antimicrobial activity classifier on **MiniMol**
+molecular fingerprints.
 
-- **Search:** The search uses PyRibs emitters to explore/exploit the latent space of the [ChemBed](https://link.springer.com/article/10.1186/s13321-026-01243-0) VAE, so evolution operates on a continuous learned molecular representation. Specifically, we are employing CMA-MAE, where each of the 16 emitters evolves its own CMA-ES population of latent vectors, which the VAE decodes into SMILES.
+*(Historical Quality-Diversity / `pyribs` CMA-MAE and MAP-Elites experiments are
+archived on the `legacy/qd-pyribs` branch at tag `v0.1-qd-final`.)*
 
-- **Scoring:** a **TabPFN v3.5** classifier trained on the public
-  [GNEtolC](https://github.com/Genentech/gneprop) dataset predicts P(active). This functions as the reward for our  search, therefore, molecules are only as good as the model and data that were used to train.
-  The activity representation is selected in `config.toml` with
-  `activity.representation`: `rdkit2d`, `chemeleon` or `minimol`. Model performance
-  metrics and evaluation are private for now, and will be added in future updates.
-- **Behavior space:** These will be the primary drivers for the notion of diversity in the search. They are not guaranteed to accurately reflect _structural_ diversity, as diverisity in this case are in the terms of the dimension itself. For now, any combination of the dimensions are available:
-  `logp`, `tpsa`, `mw`, `fsp3`, `num_rotb`, `num_rings`, `balabanj`,
-  `vsa_estate2`, `bcut2d_logplow`, `max_partial_charge`.
-  For now, the ranges are set from the observed support of the training actives, so no resolution is spent on empty space, and a cell is only replaced by a better-scoring molecule rather than by a different one.
+- **Search (`optimization/cma.py`):** `n_populations` independent
+  `cma.CMAEvolutionStrategy` walkers explore ChemBed's 256D latent space in
+  parallel (optionally projected through a whitened 95D PCA via `[pca]`). All
+  populations are batched together on every step for single-pass GPU decoding
+  and oracle inference. Any native `pycma` option (`minstd`, `CMA_diagonal`,
+  `CSA_dampfac`, `tolflatfitness`, etc.) can be passed directly under
+  `[cma.opts]` in `config.toml`, and `"naive"` (`N(0, I)` random-prior sampling)
+  is built in as a zero-feedback baseline.
+- **Scoring (`evaluation/` + `chemistry/`):** Candidate latent vectors decode to
+  SMILES, pass RDKit validity and canonicalization checks, and are globally
+  deduplicated so duplicate molecules cost **zero** oracle calls (and receive
+  `-1.0` objective penalty to push walkers off discrete VAE plateaus). First-seen
+  valid molecules are featurized with `minimol-onnx` (512D) and scored by
+  `TabPFNClassifier.predict_proba()` for `P(active)`.
+- **Candidate & Scaffold Tracking (`optimization/candidates.py`):** Unique hits
+  exceeding `run.hit_threshold` are stored and clustered by generic Murcko
+  scaffolds (`chemistry/scaffolds.py`) to monitor structural diversity across
+  oracle calls without adding any diversity or similarity term to the objective.
 
-Most generation parameters can be easily changed in `config.toml`
+## Environment Setup
 
-## Requirements
-
-The environment is managed with [uv](https://docs.astral.sh/uv/), which
-resolves the full dependency tree and pins it in `uv.lock`:
+Dependencies are managed exclusively with [uv](https://docs.astral.sh/uv/) and
+pinned in `uv.lock`:
 
 ```bash
 uv python pin 3.12
 uv sync
 ```
 
-The conda environment is kept as a fallback. `environment.yaml` pins the same
-versions, but there `chembed` has to be installed by hand:
+MiniMol runs inside EVA's environment via `minimol-onnx` (frozen ONNX graph +
+pure-Python featurizer). Note that `rdkit==2023.9.6`, `numpy==1.26.4`, and
+`datamol==0.12.5` are deliberately pinned for numerical reproducibility of the
+trained `TabPFN` model (`data/predictor/tabpfn_minimol.joblib`). If the
+environment changes, retrain the classifier:
 
 ```bash
-micromamba env create -f environment.yaml
-micromamba activate eva
-pip install --no-deps chembed
-```
-
-The TabPFN model, and PCA projection must be trained/fitted first. The GNEtolC
-features are not part of this repo, so point `--features-dir` at your local copy:
-
-```bash
-python scripts/train_tabpfn.py \
-  --features-dir /path/to/GNEtolC/rdkit2d \
-  --out data/predictor/tabpfn_rdkit2d.joblib \
-  --representation rdkit2d
-python scripts/train_tabpfn.py \
-  --features-dir /path/to/GNEtolC/chemeleon \
-  --out data/predictor/tabpfn_chemeleon.joblib \
-  --representation chemeleon
-python scripts/train_tabpfn.py \
+uv run python scripts/train_tabpfn.py \
   --csv data/predictor/predictor_training_data.csv \
   --out data/predictor/tabpfn_minimol.joblib \
   --representation minimol
-python scripts/fit_latent_pca.py
 ```
 
-The trained GNEtolC models are `data/predictor/tabpfn_rdkit2d.joblib`,
-`data/predictor/tabpfn_chemeleon.joblib` and `data/predictor/tabpfn_minimol.joblib`.
-CheMeleon inference requires the `chemprop` dependency and its checkpoint,
-downloaded on first use.
+If enabling `[pca]` (`enabled = true`), fit the whitened latent PCA transform:
 
-MiniMol runs in EVA's own environment through `minimol-onnx`: the graph is
-frozen to ONNX and the Graphium featurizer is vendored as pure Python, so no
-separate interpreter or PyG build is needed. `datamol` is pinned to 0.12.5
-because 0.13+ requires rdkit ≥ 2024.9.1. If the featurizer environment changes,
-retrain `tabpfn_minimol.joblib` — eigenvector signs are LAPACK-specific.
+```bash
+uv run python scripts/fit_latent_pca.py
+```
 
-## Run
+## Running EVA
+
+Single run (reads `config.toml`, stops at `run.oracle_budget` and/or
+`run.max_generations`):
 
 ```bash
 uv run python EVA.py --config config.toml
 ```
 
-- All experiment parameters live in `config.toml` (see `config.py`). Set
-  `output.run_name` before each experiment, as a run overwrites the results
-  directory of the same name.
-- Resume an interrupted run: `uv run python EVA.py --config config.toml --resume results/<run>/scheduler.joblib`
-- Outputs land in `results/<run_name>/`: `all_evaluations.csv` with every
-  molecule that was scored, `result_archive.csv` with the best molecule per
-  cell, `scheduler.joblib` for resuming, and `heatmap.png`. Metrics are
-  streamed to `tensorboard/` inside the same directory.
-  
-To resume an interrupted run:
+CLI overrides for multi-seed oracle-budget comparisons or baselines:
 
 ```bash
-uv run python EVA.py --resume path/to/scheduler.joblib
+# Multi-seed pycma sweep (writes under results/<run_name>/seed_<k>/)
+uv run python EVA.py --config config.toml --oracle-budget 100000 --seeds 1,2,3
+
+# Unconditional N(0, I) random-prior baseline at the same oracle budget
+uv run python EVA.py --config config.toml --solver naive --oracle-budget 100000 --seeds 1,2,3
 ```
 
-## TODO
+Resume an interrupted single run from its checkpoint:
 
-- Make the predictor public
-- Release the archives and the best candidates from each run
+```bash
+uv run python EVA.py --config config.toml --resume results/<run_name>/checkpoint.joblib
+```
+
+### Outputs (`results/<run_name>/`)
+
+- `candidates.csv` — unique valid molecules with `P(active) >= hit_threshold`,
+  ranked descending with `canonical_smiles`, `p_active`, `generic_scaffold`,
+  `walker_id`, `step`, and `oracle_call`.
+- `curve.csv` — per-step cumulative trajectory (`oracle_calls`, `validity`,
+  `best_p_active`, `n_hits_05`, `n_hits_06`, `n_hits_08`,
+  `unique_scaffolds_06`, `walker_spread`, `total_restarts`).
+- `summary.json` & `config.json` — final metrics, generic scaffold diversity
+  summary, stopping reason, and resolved configuration.
+- `checkpoint.joblib` — full solver (`CMAWalker`s + isolated RNG states),
+  deduplication set, and candidate store for exact `--resume`.
+- `all_evaluations.csv` — per-attempt log (when `run.save_all_evaluations = true`).
+- `tensorboard/` — step-indexed CMA diagnostics, oracle-call-indexed hit/scaffold
+  curves, and rendered top-molecule grids.
+
+## Development
+
+```bash
+uv run pytest -q
+uv run ruff check .
+uv run black .
+```

@@ -47,6 +47,8 @@ class EvalResult:
     """First-seen chemically valid canonical SMILES sent to TabPFN."""
     canonical: list[str | None] | None = None
     """Canonical SMILES per attempt; ``None`` for chemically invalid ones."""
+    oracle_mask: np.ndarray | None = None
+    """Boolean mask of attempts that were first-seen valid and sent to the oracle."""
 
 
 class Evaluator:
@@ -198,6 +200,7 @@ class Evaluator:
             n_duplicates=n_duplicates,
             n_oracle_calls=int(new_mask.sum()),
             canonical=list(canonical),
+            oracle_mask=new_mask.copy(),
         )
 
 

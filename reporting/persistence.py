@@ -1,139 +1,128 @@
-"""State persistence: save and load scheduler and archive."""
+"""State persistence: checkpoints, candidate CSVs, and JSON summaries."""
 
 from __future__ import annotations
 
+import json
+from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 import joblib
-import numpy as np
-import pandas as pd
-from ribs.archives import GridArchive
-from ribs.schedulers import Scheduler
 
+from config import ExperimentConfig
+from optimization.candidates import CandidateStore
+from optimization.cma import Solver
+from optimization.loop import SearchLoop
 from reporting.console import loaded, saved
-from reporting.tables import _rank_archive
 
 
-def save_archive(
-    archive: GridArchive,
-    decode_fn,
+@dataclass
+class CheckpointState:
+    """Serializable snapshot of a running :class:`~optimization.loop.SearchLoop`."""
+
+    solver: Solver
+    seen_smiles: set[str]
+    candidates: CandidateStore
+    step: int
+    attempts: int
+    oracle_calls: int
+    duplicate_attempts: int
+    invalid_attempts: int
+    elapsed_s: float
+    solver_name: str
+    seed: int
+
+
+def save_checkpoint(
+    loop: SearchLoop,
+    seen_smiles: set[str],
     output_dir: str | Path,
-    suffix: str = "archive",
-    dimension_names: list[str] | None = None,
-    real_objectives: dict[int, float] | None = None,
+    *,
+    quiet: bool = False,
 ) -> Path:
-    """Save the archive as joblib (full state) and CSV (tabular data).
+    """Persist full solver, deduplication, and candidate state to ``checkpoint.joblib``.
 
     Parameters
     ----------
-    archive : GridArchive
-        The archive to persist.
-    decode_fn : callable
-        Latent vectors → SMILES decoder.
+    loop : SearchLoop
+        Active search loop.
+    seen_smiles : set of str
+        Canonical SMILES already evaluated by the oracle.
     output_dir : str or Path
-        Directory to write ``<suffix>.joblib`` and ``<suffix>.csv``.
-    suffix : str
-        Base filename for the saved files (default ``"archive"``).
-    dimension_names : list of str or None
-        Names of enabled archive dimensions.
-    real_objectives : dict or None
-        Real P(active) values (uncapped) keyed by solution index.
+        Run output directory.
+    quiet : bool, default=False
+        Suppress terminal print when True (used on frequent background saves).
 
     Returns
     -------
     Path
-        Directory where files were written.
+        Path to ``checkpoint.joblib``.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    joblib_path = output_dir / f"{suffix}.joblib"
-    joblib.dump(archive, joblib_path)
-    saved("archive", joblib_path)
-
-    csv_path = output_dir / f"{suffix}.csv"
-    _export_archive_csv(archive, decode_fn, csv_path, dimension_names, real_objectives)
-    saved("CSV", csv_path)
-
-    return output_dir
-
-
-def _export_archive_csv(
-    archive: GridArchive,
-    decode_fn,
-    csv_path: Path,
-    dimension_names: list[str] | None = None,
-    real_objectives: dict[int, float] | None = None,
-) -> None:
-    """Write archive contents to a CSV file."""
-    if dimension_names is None:
-        dimension_names = [f"dim_{i}" for i in range(archive.measure_dim)]
-
-    if len(archive) == 0:
-        columns = ["rank", "smiles", "p_active", "p_active_real"] + dimension_names
-        pd.DataFrame(columns=columns).to_csv(csv_path, index=False)
-        return
-
-    order, _, smiles = _rank_archive(archive, decode_fn, len(archive))
-    arch_data = archive.data()
-
-    data = {
-        "rank": np.arange(1, len(order) + 1),
-        "smiles": smiles,
-        "p_active": arch_data["objective"][order],
-    }
-
-    if real_objectives is not None:
-        cell_indices = arch_data["index"][order]
-        data["p_active_real"] = [
-            real_objectives.get(idx, np.nan) for idx in cell_indices
-        ]
-    else:
-        data["p_active_real"] = [np.nan] * len(order)
-
-    for d, name in enumerate(dimension_names):
-        data[name] = arch_data["measures"][order, d]
-
-    df = pd.DataFrame(data)
-    df.to_csv(csv_path, index=False)
-
-
-def save_scheduler(scheduler: Scheduler, output_dir: str | Path) -> Path:
-    """Save full scheduler state (archive + emitter + CMA-ES) as joblib.
-
-    Parameters
-    ----------
-    scheduler : Scheduler
-        The scheduler to persist.
-    output_dir : str or Path
-        Directory to write ``scheduler.joblib``.
-
-    Returns
-    -------
-    Path
-        Path to the saved file.
-    """
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / "scheduler.joblib"
-    joblib.dump(scheduler, path)
-    saved("scheduler", path)
+    path = output_dir / "checkpoint.joblib"
+    state = CheckpointState(
+        solver=loop.solver,
+        seen_smiles=set(seen_smiles),
+        candidates=loop.candidates,
+        step=loop.step_count,
+        attempts=loop.attempts,
+        oracle_calls=loop.oracle_calls,
+        duplicate_attempts=loop.duplicate_attempts,
+        invalid_attempts=loop.invalid_attempts,
+        elapsed_s=loop.elapsed_s,
+        solver_name=loop.solver_name,
+        seed=loop.seed,
+    )
+    joblib.dump(state, path)
+    if not quiet:
+        saved("checkpoint", path, f"step {state.step}, {state.oracle_calls:,} calls")
     return path
 
 
-def load_scheduler(path: str | Path) -> Scheduler:
-    """Load a saved scheduler, ready to continue ask/tell.
+def load_checkpoint(path: str | Path) -> CheckpointState:
+    """Load a :class:`CheckpointState` from ``checkpoint.joblib``."""
+    state: CheckpointState = joblib.load(path)
+    loaded(
+        "checkpoint",
+        path,
+        f"step {state.step}, {state.oracle_calls:,} oracle calls",
+    )
+    return state
 
-    Parameters
-    ----------
-    path : str or Path
-        Path to ``scheduler.joblib``.
 
-    Returns
-    -------
-    Scheduler
-        The restored scheduler with full CMA-ES state.
-    """
-    scheduler: Scheduler = joblib.load(path)
-    loaded("scheduler", path, f"{len(scheduler.archive)} cells")
-    return scheduler
+def save_candidates(
+    candidates: CandidateStore,
+    output_dir: str | Path,
+    *,
+    quiet: bool = False,
+) -> Path:
+    """Write ranked active hits to ``candidates.csv``."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = output_dir / "candidates.csv"
+    df = candidates.to_dataframe()
+    df.to_csv(csv_path, index=False)
+    if not quiet:
+        saved("candidates", csv_path, f"{len(df):,} molecules")
+    return csv_path
+
+
+def save_summary(summary: dict[str, Any], output_dir: str | Path) -> Path:
+    """Write ``summary.json`` to *output_dir*."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / "summary.json"
+    path.write_text(json.dumps(summary, indent=2))
+    saved("summary", path)
+    return path
+
+
+def save_resolved_config(cfg: ExperimentConfig, output_dir: str | Path) -> Path:
+    """Write resolved ``ExperimentConfig`` as ``config.json``."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / "config.json"
+    path.write_text(json.dumps(asdict(cfg), indent=2, default=str))
+    saved("config", path)
+    return path
