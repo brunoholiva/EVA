@@ -1,281 +1,453 @@
-"""Main multi-population CMA-ES search entrypoint for EVA."""
+"""EVA: Barebones multi-population CMA-ES search for viable antibiotics."""
 
 from __future__ import annotations
 
 import argparse
-from dataclasses import replace
+import csv
+import json
+import time
+from collections import Counter
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from chemistry.featurizers import make_activity_featurizer
-from config import VALID_SOLVERS, ExperimentConfig
-from evaluation import Evaluator
-from evaluation.activity import load_model as load_tabpfn
-from evaluation.activity import predict_from_features
-from generative import ChemBedVAE, ProjectedVAE
-from optimization import CandidateStore, SearchLoop, TensorBoardLogger, build_solver
-from optimization.loop import resolve_max_generations
-from reporting.console import detail, make_progress_bar, section, step
-from reporting.persistence import (
-    load_checkpoint,
-    save_candidates,
-    save_checkpoint,
-    save_resolved_config,
-    save_summary,
-)
-from reporting.tables import print_results, print_step
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+
+from config import VALID_SOLVERS, Config
+from oracle import Oracle, generic_scaffold
+from solvers import Solver, build_solver
+from vae import ChemBedVAE
+
+CANDIDATE_COLUMNS = [
+    "rank",
+    "canonical_smiles",
+    "p_active",
+    "generic_scaffold",
+    "walker_id",
+    "step",
+    "oracle_call",
+]
+
+CURVE_COLUMNS = [
+    "solver",
+    "seed",
+    "step",
+    "elapsed_s",
+    "attempts",
+    "oracle_calls",
+    "duplicate_attempts",
+    "invalid_attempts",
+    "validity",
+    "best_p_active",
+    "n_hits_05",
+    "n_hits_06",
+    "n_hits_08",
+    "unique_scaffolds_06",
+    "walker_spread",
+    "sigma_mean",
+    "sigma_min",
+    "axis_ratio_max",
+    "restarts",
+]
+
+ATTEMPT_COLUMNS = [
+    "solver",
+    "seed",
+    "step",
+    "attempt",
+    "walker_id",
+    "canonical_smiles",
+    "valid",
+    "duplicate",
+    "oracle_called",
+    "p_active",
+]
+
+_MAX_STEP_MULTIPLIER = 20
+
+
+@dataclass(frozen=True)
+class Candidate:
+    """Unique hit stored when ``P(active) >= hit_threshold``."""
+
+    canonical_smiles: str
+    p_active: float
+    generic_scaffold: str
+    walker_id: int
+    step: int
+    oracle_call: int
+
+
+class CandidateStore:
+    """Accumulates unique hits and tracks generic Murcko scaffold diversity."""
+
+    def __init__(self, hit_threshold: float = 0.5) -> None:
+        self.hit_threshold = hit_threshold
+        self._hits: dict[str, Candidate] = {}
+        self.best_p_active: float = 0.0
+        self.n_hits_05: int = 0
+        self.n_hits_06: int = 0
+        self.n_hits_08: int = 0
+        self._scaffolds_06: Counter[str] = Counter()
+
+    def __len__(self) -> int:
+        """Return the number of saved candidates."""
+        return len(self._hits)
+
+    @property
+    def unique_scaffolds_06(self) -> int:
+        """Unique generic scaffolds among ``P >= 0.6`` molecules."""
+        return len(self._scaffolds_06)
+
+    @property
+    def largest_scaffold_frac_06(self) -> float:
+        """Share of ``P >= 0.6`` hits in the single largest scaffold cluster."""
+        if self.n_hits_06 == 0 or not self._scaffolds_06:
+            return 0.0
+        return float(self._scaffolds_06.most_common(1)[0][1] / self.n_hits_06)
+
+    def add(
+        self,
+        smiles: str,
+        p_active: float,
+        walker_id: int,
+        step: int,
+        oracle_call: int,
+    ) -> None:
+        """Record one first-seen valid oracle-scored molecule."""
+        if smiles in self._hits:
+            return
+        if p_active > self.best_p_active:
+            self.best_p_active = float(p_active)
+        if p_active >= 0.5:
+            self.n_hits_05 += 1
+        if p_active >= 0.8:
+            self.n_hits_08 += 1
+
+        keep = p_active >= self.hit_threshold
+        in_06 = p_active >= 0.6
+        if not keep and not in_06:
+            return
+
+        scaff = generic_scaffold(smiles)
+        if in_06:
+            self.n_hits_06 += 1
+            self._scaffolds_06[scaff] += 1
+        if keep:
+            self._hits[smiles] = Candidate(
+                canonical_smiles=smiles,
+                p_active=float(p_active),
+                generic_scaffold=scaff,
+                walker_id=int(walker_id),
+                step=int(step),
+                oracle_call=int(oracle_call),
+            )
+
+    def ranked(self, top_n: int | None = None) -> list[Candidate]:
+        """Return hits sorted descending by ``p_active``."""
+        ordered = sorted(
+            self._hits.values(), key=lambda c: (-c.p_active, c.oracle_call)
+        )
+        return ordered[:top_n] if top_n is not None else ordered
+
+    def to_dataframe(self) -> pd.DataFrame:
+        """Export ranked hits as a DataFrame."""
+        items = self.ranked()
+        if not items:
+            return pd.DataFrame(columns=CANDIDATE_COLUMNS)
+        rows = [
+            {
+                "rank": i,
+                "canonical_smiles": c.canonical_smiles,
+                "p_active": c.p_active,
+                "generic_scaffold": c.generic_scaffold,
+                "walker_id": c.walker_id,
+                "step": c.step,
+                "oracle_call": c.oracle_call,
+            }
+            for i, c in enumerate(items, start=1)
+        ]
+        return pd.DataFrame(rows, columns=CANDIDATE_COLUMNS)
+
+
+def run_search(
+    *,
+    solver: Solver,
+    decode_fn,
+    oracle: Oracle,
+    output_dir: Path,
+    solver_name: str,
+    seed: int,
+    oracle_budget: int,
+    hit_threshold: float = 0.5,
+    save_all: bool = False,
+    show_progress: bool = True,
+) -> tuple[dict[str, Any], CandidateStore]:
+    """Execute ``ask -> decode -> score -> tell`` until *oracle_budget* is spent."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    min_steps = max(1, int(np.ceil(oracle_budget / max(1, solver.batch_size))))
+    max_steps = max(1000, _MAX_STEP_MULTIPLIER * min_steps)
+
+    store = CandidateStore(hit_threshold=hit_threshold)
+    attempts = 0
+    oracle_calls = 0
+    dup_attempts = 0
+    inv_attempts = 0
+    step = 0
+    t0 = time.time()
+
+    f_all = (
+        (output_dir / "all_evaluations.csv").open("w", newline="") if save_all else None
+    )
+    pbar = tqdm(
+        total=oracle_budget,
+        desc=f"{solver_name} (seed {seed})",
+        unit="mol",
+        dynamic_ncols=True,
+        disable=not show_progress,
+    )
+
+    try:
+        with (output_dir / "curve.csv").open("w", newline="") as f_curve:
+            w_curve = csv.writer(f_curve)
+            w_curve.writerow(CURVE_COLUMNS)
+
+            w_all = None
+            if f_all is not None:
+                w_all = csv.writer(f_all)
+                w_all.writerow(ATTEMPT_COLUMNS)
+
+            while oracle_calls < oracle_budget and step < max_steps:
+                z, walker_ids = solver.ask()
+                canonical = decode_fn(z)
+                batch = oracle.score(canonical)
+                solver.tell(z, batch.objectives)
+
+                prev_calls = oracle_calls
+                step_scored = 0
+                step_dup = 0
+                for i, smi in enumerate(batch.canonical):
+                    valid = smi is not None
+                    charged = bool(batch.oracle_mask[i])
+                    dup = valid and not charged
+                    pa = float(batch.p_active[i]) if charged else float("nan")
+                    wid = int(walker_ids[i])
+
+                    if w_all is not None:
+                        w_all.writerow(
+                            [
+                                solver_name,
+                                seed,
+                                step,
+                                attempts,
+                                wid,
+                                smi,
+                                valid,
+                                dup,
+                                charged,
+                                pa,
+                            ]
+                        )
+
+                    attempts += 1
+                    if not valid:
+                        inv_attempts += 1
+                    elif dup:
+                        step_dup += 1
+                        dup_attempts += 1
+                    else:
+                        step_scored += 1
+                        oracle_calls += 1
+                        assert smi is not None
+                        store.add(smi, pa, wid, step, oracle_calls)
+
+                assert step_scored == batch.n_oracle_calls
+                assert step_dup == batch.n_duplicates
+
+                validity = (attempts - inv_attempts) / attempts if attempts else 0.0
+                st = solver.stats()
+                elapsed = time.time() - t0
+
+                w_curve.writerow(
+                    [
+                        solver_name,
+                        seed,
+                        step,
+                        elapsed,
+                        attempts,
+                        oracle_calls,
+                        dup_attempts,
+                        inv_attempts,
+                        validity,
+                        store.best_p_active,
+                        store.n_hits_05,
+                        store.n_hits_06,
+                        store.n_hits_08,
+                        store.unique_scaffolds_06,
+                        st.walker_spread,
+                        st.sigma_mean,
+                        st.sigma_min,
+                        st.axis_ratio_max,
+                        st.restarts,
+                    ]
+                )
+                f_curve.flush()
+                if f_all is not None:
+                    f_all.flush()
+
+                delta = min(oracle_calls, oracle_budget) - min(
+                    prev_calls, oracle_budget
+                )
+                if delta > 0:
+                    pbar.update(delta)
+                pbar.set_postfix(
+                    best=f"{store.best_p_active:.3f}",
+                    h60=store.n_hits_06,
+                    scaff60=store.unique_scaffolds_06,
+                    val=f"{validity:.0%}",
+                    sig=f"{st.sigma_mean:.2f}",
+                )
+                step += 1
+    finally:
+        pbar.close()
+        if f_all is not None:
+            f_all.close()
+
+    store.to_dataframe().to_csv(output_dir / "candidates.csv", index=False)
+
+    st = solver.stats()
+    validity = (attempts - inv_attempts) / attempts if attempts else 0.0
+    summary = {
+        "solver": solver_name,
+        "seed": seed,
+        "oracle_budget": oracle_budget,
+        "steps": step,
+        "attempts": attempts,
+        "oracle_calls": oracle_calls,
+        "duplicate_attempts": dup_attempts,
+        "invalid_attempts": inv_attempts,
+        "validity": validity,
+        "best_p_active": store.best_p_active,
+        "n_candidates_saved": len(store),
+        "n_hits_05": store.n_hits_05,
+        "n_hits_06": store.n_hits_06,
+        "n_hits_08": store.n_hits_08,
+        "unique_scaffolds_06": store.unique_scaffolds_06,
+        "largest_scaffold_frac_06": store.largest_scaffold_frac_06,
+        "walker_spread": st.walker_spread,
+        "sigma_mean": st.sigma_mean,
+        "sigma_min": st.sigma_min,
+        "axis_ratio_max": st.axis_ratio_max,
+        "restarts": st.restarts,
+        "stopped_on": "oracle_budget" if oracle_calls >= oracle_budget else "max_steps",
+        "elapsed_s": time.time() - t0,
+    }
+    (output_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+    return summary, store
+
+
+def _print_summary(
+    summary: dict[str, Any], store: CandidateStore, out_dir: Path
+) -> None:
+    """Print a concise plain-text summary after a run completes."""
+    print(
+        f"\n[{summary['solver']} seed={summary['seed']}] "
+        f"oracle={summary['oracle_calls']:,} ({summary['attempts']:,} attempts, "
+        f"valid={summary['validity']:.1%}, {summary['elapsed_s']:.1f}s) -> {out_dir}"
+    )
+    print(
+        f"  best={summary['best_p_active']:.4f} | "
+        f"hits>=0.5: {summary['n_hits_05']:,} | "
+        f"hits>=0.6: {summary['n_hits_06']:,} | "
+        f"hits>=0.8: {summary['n_hits_08']:,} | "
+        f"scaffolds>=0.6: {summary['unique_scaffolds_06']:,} "
+        f"(max cluster {summary['largest_scaffold_frac_06']:.1%})"
+    )
+    for rank, c in enumerate(store.ranked(top_n=5), start=1):
+        print(
+            f"  #{rank} P={c.p_active:.4f} [w{c.walker_id} @{c.oracle_call:,}] "
+            f"{c.canonical_smiles}  (scaffold: {c.generic_scaffold})"
+        )
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """Parse CLI arguments."""
-    parser = argparse.ArgumentParser(
-        description="EVA: Evolution of Viable Antibiotics (pycma)"
+    """Parse CLI flags."""
+    p = argparse.ArgumentParser(description="EVA: Barebones CMA-ES Molecule Search")
+    p.add_argument("--config", default="config.toml", help="Path to TOML config")
+    p.add_argument("--solver", choices=VALID_SOLVERS, default=None)
+    p.add_argument("--oracle-budget", type=int, default=None)
+    p.add_argument("--run-name", type=str, default=None)
+    p.add_argument("--seeds", type=str, default=None, help="Comma-separated seeds")
+    p.add_argument(
+        "--save-all",
+        action="store_true",
+        help="Also stream per-attempt all_evaluations.csv",
     )
-    parser.add_argument(
-        "--config",
-        type=str,
-        default="config.toml",
-        help="Path to experiment config TOML (default: config.toml)",
-    )
-    parser.add_argument(
-        "--resume",
-        type=str,
-        default=None,
-        help="Path to checkpoint.joblib to resume a single run from",
-    )
-    parser.add_argument(
-        "--solver",
-        choices=VALID_SOLVERS,
-        default=None,
-        help="Override run.solver ('pycma' or 'naive')",
-    )
-    parser.add_argument(
-        "--oracle-budget",
-        type=int,
-        default=None,
-        help="Override run.oracle_budget (unique valid molecules scored)",
-    )
-    parser.add_argument(
-        "--max-generations",
-        type=int,
-        default=None,
-        help="Override run.max_generations",
-    )
-    parser.add_argument(
-        "--seeds",
-        type=str,
-        default=None,
-        help="Comma-separated seeds for multi-seed runs under <run_name>/seed_<k>/",
-    )
-    return parser.parse_args(argv)
+    return p.parse_args(argv)
 
 
-def load_vae(cfg: ExperimentConfig) -> ChemBedVAE | ProjectedVAE:
-    """Load the ChemBed VAE, optionally wrapped with whitened PCA projection."""
-    step("Loading ChemBed VAE")
-    vae = ChemBedVAE(
-        model_repo_id=cfg.generative.model_repo_id,
-        device=cfg.generative.device,
-        latent_dim=cfg.generative.latent_dim,
-    )
-    if cfg.pca.enabled:
-        step(f"Applying PCA projection ({cfg.pca.path})")
-        vae = ProjectedVAE(vae, cfg.pca.path)
-        cfg.solution_dim = vae.latent_dim
-        detail(f"Working space: {vae.latent_dim} dim (was {cfg.generative.latent_dim})")
-    else:
-        cfg.solution_dim = vae.latent_dim
-        detail(f"Working space: {vae.latent_dim} dim (raw ChemBed latent space)")
-    return vae
+def main(argv: list[str] | None = None) -> None:
+    """Load models once and execute single-seed or multi-seed search."""
+    args = _parse_args(argv)
+    cfg = Config.from_toml(args.config)
 
-
-def load_activity_oracle(cfg: ExperimentConfig):
-    """Load the TabPFN activity model and MiniMol featurizer."""
-    step("Loading activity oracle")
-    tabpfn = load_tabpfn(
-        path=Path(cfg.activity.model_path),
-        device=cfg.activity.device,
-    )
-    featurizer = make_activity_featurizer(cfg.activity.representation)
-    return tabpfn, featurizer
-
-
-def run_single_seed(
-    cfg: ExperimentConfig,
-    *,
-    vae: ChemBedVAE | ProjectedVAE,
-    tabpfn,
-    featurizer,
-    output_dir: Path,
-    resume_from: str | None = None,
-) -> dict[str, Any]:
-    """Execute one search run (fresh or resumed) and persist all artifacts."""
-    tb_logger = TensorBoardLogger(cfg.tensorboard, output_dir)
-    tb_logger.log_config(cfg)
-
-    resuming = bool(resume_from)
-    if resume_from:
-        section(f"Resuming {cfg.run.solver} (seed {cfg.run.seed})")
-        ckpt = load_checkpoint(resume_from)
-        evaluator = Evaluator(
-            decode=vae.decode,
-            activity=predict_from_features,
-            activity_model=tabpfn,
-            featurizer=featurizer,
-            seen_smiles=ckpt.seen_smiles,
-        )
-        loop = SearchLoop(
-            ckpt.solver,
-            evaluator,
-            ckpt.candidates,
-            solver_name=ckpt.solver_name,
-            seed=ckpt.seed,
-            step=ckpt.step,
-            attempts=ckpt.attempts,
-            oracle_calls=ckpt.oracle_calls,
-            duplicate_attempts=ckpt.duplicate_attempts,
-            invalid_attempts=ckpt.invalid_attempts,
-            elapsed_offset_s=ckpt.elapsed_s,
-        )
-    else:
-        section(f"Running {cfg.run.solver} (seed {cfg.run.seed})")
-        solver = build_solver(
-            solver_name=cfg.run.solver,
-            solution_dim=cfg.solution_dim,
-            cfg=cfg.cma,
-            seed=cfg.run.seed,
-        )
-        evaluator = Evaluator(
-            decode=vae.decode,
-            activity=predict_from_features,
-            activity_model=tabpfn,
-            featurizer=featurizer,
-        )
-        candidates = CandidateStore(hit_threshold=cfg.run.hit_threshold)
-        loop = SearchLoop(
-            solver,
-            evaluator,
-            candidates,
-            solver_name=cfg.run.solver,
-            seed=cfg.run.seed,
-        )
-
-    oracle_budget = cfg.run.oracle_budget
-    effective_max_gens = resolve_max_generations(
-        oracle_budget, cfg.run.max_generations, loop.solver.batch_size
-    )
-    use_oracle_bar = oracle_budget > 0
-    bar_label = (
-        f"{cfg.run.solver} (oracle calls)"
-        if use_oracle_bar
-        else f"{cfg.run.solver} (steps)"
-    )
-    bar_total = oracle_budget if use_oracle_bar else effective_max_gens
-    progress, task_id = make_progress_bar(bar_label, bar_total)
-
-    try:
-        with progress:
-
-            def _on_step(snap):
-                completed = (
-                    min(snap.oracle_calls, oracle_budget)
-                    if use_oracle_bar
-                    else snap.step + 1
-                )
-                progress.update(task_id, completed=completed)
-                tb_logger.log_step(snap)
-
-            def _on_log(snap):
-                print_step(snap, oracle_budget=oracle_budget)
-                if snap.step > 0 and snap.result.timings.decode > 0:
-                    t = snap.result.timings
-                    detail(
-                        f"decode={t.decode:.1f}s valid={t.validity:.1f}s "
-                        f"feat+pred={t.featurize_predict:.1f}s "
-                        f"solver={t.solver_ops:.2f}s"
-                    )
-                save_checkpoint(loop, evaluator.seen_smiles, output_dir, quiet=True)
-                save_candidates(loop.candidates, output_dir, quiet=True)
-
-            summary = loop.run(
-                output_dir=output_dir,
-                oracle_budget=oracle_budget,
-                max_generations=cfg.run.max_generations,
-                save_all_evaluations=cfg.run.save_all_evaluations,
-                log_every=cfg.run.log_every,
-                resuming=resuming,
-                on_step=_on_step,
-                on_log=_on_log,
-            )
-
-        print_results(loop.candidates, summary)
-        save_checkpoint(loop, evaluator.seen_smiles, output_dir)
-        save_candidates(loop.candidates, output_dir)
-        save_summary(summary, output_dir)
-        save_resolved_config(cfg, output_dir)
-        tb_logger.log_summary(summary)
-        return summary
-    finally:
-        tb_logger.close()
-
-
-def _apply_cli_overrides(
-    cfg: ExperimentConfig, args: argparse.Namespace
-) -> ExperimentConfig:
-    """Return a copy of *cfg* with CLI overrides applied."""
     run_cfg = cfg.run
     if args.solver is not None:
         run_cfg = replace(run_cfg, solver=args.solver)
     if args.oracle_budget is not None:
         run_cfg = replace(run_cfg, oracle_budget=args.oracle_budget)
-    if args.max_generations is not None:
-        run_cfg = replace(run_cfg, max_generations=args.max_generations)
-    return replace(cfg, run=run_cfg)
+    if args.run_name is not None:
+        run_cfg = replace(run_cfg, run_name=args.run_name)
+    if args.save_all:
+        run_cfg = replace(run_cfg, save_all=True)
+    cfg = replace(cfg, run=run_cfg)
 
+    seeds = (
+        [int(s.strip()) for s in args.seeds.split(",") if s.strip()]
+        if args.seeds
+        else None
+    )
 
-def main(argv: list[str] | None = None) -> None:
-    """Entry point for EVA."""
-    args = _parse_args(argv)
+    print(f"Loading ChemBed VAE ({cfg.models.vae_repo}) on {cfg.models.device}")
+    vae = ChemBedVAE(repo_id=cfg.models.vae_repo, device=cfg.models.device)
+    print(f"Loading MiniMol + TabPFN oracle ({cfg.models.predictor_path})")
+    tabpfn_model_oracle = Oracle.from_pretrained(
+        cfg.models.predictor_path, device=cfg.models.device
+    )
+    featurizer = tabpfn_model_oracle._featurizer
+    predict_fn = tabpfn_model_oracle._predict_fn
 
-    section("EVA")
-    step(f"Loading config from {args.config}")
-    cfg = _apply_cli_overrides(ExperimentConfig.from_toml(args.config), args)
+    root = Path(cfg.run.output_dir) / cfg.run.run_name
+    targets = (
+        [(cfg.run.seed, root)]
+        if seeds is None
+        else [(s, root / f"seed_{s}") for s in seeds]
+    )
 
-    seeds: list[int] | None = None
-    if args.seeds is not None:
-        seeds = [int(s.strip()) for s in args.seeds.split(",") if s.strip()]
-        if args.resume:
-            raise ValueError("--resume cannot be combined with --seeds")
-
-    vae = load_vae(cfg)
-    tabpfn, featurizer = load_activity_oracle(cfg)
-
-    base_dir = Path(cfg.output.output_dir) / cfg.output.run_name
-    if seeds is None:
-        resume_from = args.resume or cfg.run.resume_from or None
-        run_single_seed(
-            cfg,
-            vae=vae,
-            tabpfn=tabpfn,
-            featurizer=featurizer,
-            output_dir=base_dir,
-            resume_from=resume_from,
-        )
-        return
-
-    for seed in seeds:
-        seed_dir = base_dir / f"seed_{seed}"
-        if (seed_dir / "summary.json").exists():
-            detail(f"Skipping seed {seed}: {seed_dir / 'summary.json'} already exists")
+    for seed, out_dir in targets:
+        if seeds is not None and (out_dir / "summary.json").exists():
+            print(f"Skipping seed {seed}: {out_dir / 'summary.json'} exists")
             continue
-        seed_cfg = replace(cfg, run=replace(cfg.run, seed=seed, resume_from=""))
-        run_single_seed(
-            seed_cfg,
-            vae=vae,
-            tabpfn=tabpfn,
-            featurizer=featurizer,
-            output_dir=seed_dir,
+
+        seed_cfg = replace(cfg, run=replace(cfg.run, seed=seed))
+        solver = build_solver(seed_cfg.run.solver, vae.latent_dim, seed_cfg.cma, seed)
+        oracle = Oracle(featurizer, predict_fn)
+
+        summary, store = run_search(
+            solver=solver,
+            decode_fn=vae.decode,
+            oracle=oracle,
+            output_dir=out_dir,
+            solver_name=seed_cfg.run.solver,
+            seed=seed,
+            oracle_budget=seed_cfg.run.oracle_budget,
+            hit_threshold=seed_cfg.run.hit_threshold,
+            save_all=seed_cfg.run.save_all,
         )
+        (out_dir / "config.json").write_text(json.dumps(asdict(seed_cfg), indent=2))
+        _print_summary(summary, store, out_dir)
 
 
 if __name__ == "__main__":

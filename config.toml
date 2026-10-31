@@ -3,44 +3,20 @@ n_populations = 15
 popsize = 36
 sigma0 = 0.5
 init_std = 1.0
-bounds = 3.0
-max_gens_per_run = 0
 
 [cma.opts]
 # Optional direct passthrough to cma.CMAEvolutionStrategy (e.g. minstd = 0.25, CMA_diagonal = true)
 
-[generative]
-model_repo_id = "3BioCompBio/chembed-default"
+[models]
+vae_repo = "3BioCompBio/chembed-default"
+predictor_path = "data/predictor/tabpfn_minimol.joblib"
 device = "cuda"
-latent_dim = 256
-seed = 42
-
-[pca]
-path = "data/pca_latent.joblib"
-enabled = false
-
-[activity]
-model_path = "data/predictor/tabpfn_minimol.joblib"
-device = "cuda"
-representation = "minimol"
 
 [run]
 solver = "pycma"
 oracle_budget = 100000
-max_generations = 0
 hit_threshold = 0.5
-save_all_evaluations = true
-log_every = 20
+save_all = false
 seed = 42
-resume_from = ""
-hypothesis = "15 independent pycma walkers in raw 256D ChemBed latent space"
-
-[output]
 output_dir = "results"
-run_name = "01_pycma_256d_baseline"
-
-[tensorboard]
-enabled = true
-log_dir = "tensorboard"
-scalar_every = 1
-molecule_every = 10
+run_name = "01_pycma_baseline"

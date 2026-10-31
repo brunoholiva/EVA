@@ -9,9 +9,9 @@ dependencies = [
     "tabpfn==9.0.0",
     "torch==2.13.0", "chembed==1.0.1", "lightning==2.6.5",
     "chembl-structure-pipeline==1.2.4", "fastparquet==2026.5.0", "setuptools==81.0.0",
-    "cma==4.5.0", "tensorboard==2.21.0",
-    "rich==15.0.0", "matplotlib==3.11.1",
-    "huggingface-hub==1.26.0", "toml==0.10.2",
+    "cma==4.5.0", "tqdm==4.70.1",
+    "matplotlib==3.11.1", "seaborn==0.13.2",
+    "huggingface-hub==1.26.0",
     # MiniMol fingerprints as ONNX (no graphium / compiled PyG extensions).
     # datamol is pinned because 0.13+ requires rdkit>=2024.9.1, which would
     # break this project's deliberate rdkit==2023.9.6 pin.
