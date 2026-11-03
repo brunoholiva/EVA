@@ -14,6 +14,7 @@ from EVA import (
     ATTEMPT_COLUMNS,
     CANDIDATE_COLUMNS,
     CURVE_COLUMNS,
+    WALKER_COLUMNS,
     CandidateStore,
     run_search,
 )
@@ -38,6 +39,7 @@ def test_config_loads_repo_toml() -> None:
     assert cfg.cma.n_populations == 15
     assert cfg.cma.popsize == 36
     assert cfg.cma.batch_size == 540
+    assert cfg.models.pca_path == "data/pca_prior.joblib"
     assert cfg.run.solver == "pycma"
     assert cfg.run.oracle_budget == 100_000
     assert cfg.run.save_all is False
@@ -85,6 +87,35 @@ def test_minimol_featurizer() -> None:
     assert out.dtype == np.float32
     assert np.isfinite(out).all()
 
+    # Fallback path when a degenerate SMILES fails datamol/RemoveHs(NoneType)
+    mixed = feat.transform(["CCO", "not-a-valid-smiles", "c1ccccc1"])
+    assert mixed.shape == (3, 512)
+    assert np.allclose(mixed[0], out[0], atol=1e-5)
+    assert np.isnan(mixed[1]).all()
+    assert np.allclose(mixed[2], out[1], atol=1e-5)
+
+    oracle = Oracle(
+        feat,
+        lambda X: (
+            np.full(len(X), 0.75)
+            if np.isfinite(X).all()
+            else (_ for _ in ()).throw(AssertionError("NaN reached predictor"))
+        ),
+    )
+    batch = oracle.score(
+        ["CCO", "not-a-valid-smiles", "not-a-valid-smiles", "c1ccccc1"]
+    )
+    assert batch.canonical == ["CCO", None, None, "c1ccccc1"]
+    assert batch.n_valid == 2
+    assert batch.n_oracle_calls == 2
+    assert batch.n_duplicates == 0
+    assert batch.objectives.tolist() == [
+        0.75,
+        INVALID_OBJECTIVE,
+        INVALID_OBJECTIVE,
+        0.75,
+    ]
+
 
 def test_oracle_deduplication_and_accounting() -> None:
     calls = [0]
@@ -131,13 +162,28 @@ def test_cma_walker_and_solvers() -> None:
     mc.tell(z, np.linspace(-1.0, 0.9, 18))
     st = mc.stats()
     assert st.walker_spread > 0.0
+    assert st.mean_norm_mean > 0.0
     assert st.sigma_mean > 0.0
+    wstates = mc.walker_states()
+    assert [ws.walker_id for ws in wstates] == [0, 1, 2]
+    assert all(ws.steps == 1 and ws.steps_since_restart == 1 for ws in wstates)
+
+    # Verify restart counter and steps_since_restart reset when pycma stop() fires
+    wr = CMAWalker(
+        0, 4, CMAConfig(popsize=6, opts={"maxiter": 1}), init_seed=3, es_seed=4
+    )
+    zr = wr.ask()
+    assert wr.tell(zr, np.zeros(6)) is True
+    assert wr.state().restarts == 1
+    assert wr.state().steps == 1
+    assert wr.state().steps_since_restart == 0
 
     nv = build_solver("naive", dim=8, cfg=CMAConfig(n_populations=2, popsize=5), seed=1)
     assert isinstance(nv, NaiveSolver)
     zn, wn = nv.ask()
     assert zn.shape == (10, 8)
     assert np.all(wn == -1)
+    assert nv.walker_states() == []
 
 
 def test_candidate_store_and_run_search(tmp_path) -> None:
@@ -188,10 +234,22 @@ def test_candidate_store_and_run_search(tmp_path) -> None:
     assert list(curve.columns) == CURVE_COLUMNS
     cands = pd.read_csv(out_off / "candidates.csv")
     assert list(cands.columns) == CANDIDATE_COLUMNS
+    walkers = pd.read_csv(out_off / "walkers.csv")
+    assert list(walkers.columns) == WALKER_COLUMNS
+    assert walkers["walker_id"].tolist() == [0, 1]
+    assert int(walkers["attempts"].sum()) == summary["attempts"]
+    assert int(walkers["oracle_calls"].sum()) == summary["oracle_calls"]
+    assert int(walkers["duplicate_attempts"].sum()) == summary["duplicate_attempts"]
+    assert int(walkers["invalid_attempts"].sum()) == summary["invalid_attempts"]
+    assert int(walkers["n_hits_06"].sum()) == summary["n_hits_06"]
+    assert summary["n_walkers"] == 2
+    if summary["n_hits_06"] > 0:
+        assert np.isclose(walkers["hit_share_06"].sum(), 1.0)
+        assert np.isclose(walkers["hit_share_06"].max(), summary["top_walker_share_06"])
     saved = json.loads((out_off / "summary.json").read_text())
     assert saved["oracle_calls"] == summary["oracle_calls"]
 
-    # Verify save_all=True writes all_evaluations.csv
+    # Verify save_all=True writes all_evaluations.csv and naive writes empty walkers.csv
     out_all = tmp_path / "run_all"
     solver2 = build_solver(
         "naive", dim=4, cfg=CMAConfig(n_populations=2, popsize=4), seed=8
@@ -214,3 +272,7 @@ def test_candidate_store_and_run_search(tmp_path) -> None:
     evals = pd.read_csv(out_all / "all_evaluations.csv")
     assert list(evals.columns) == ATTEMPT_COLUMNS
     assert len(evals) == s2["attempts"]
+    naive_walkers = pd.read_csv(out_all / "walkers.csv")
+    assert list(naive_walkers.columns) == WALKER_COLUMNS
+    assert len(naive_walkers) == 0
+    assert s2["n_walkers"] == 0

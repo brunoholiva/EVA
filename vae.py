@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from math import prod
+from pathlib import Path
 
+import joblib
 import numpy as np
 import selfies as sf
 import torch
@@ -30,13 +32,16 @@ def _selfies_to_canonical(selfies_str: str) -> str | None:
         mol = Chem.MolFromSmiles(smi)
         if mol is None:
             return None
-        return Chem.MolToSmiles(mol)
+        canonical = Chem.MolToSmiles(mol)
+        if not canonical or Chem.MolFromSmiles(canonical) is None:
+            return None
+        return canonical
     except Exception:
         return None
 
 
 class ChemBedVAE:
-    """Encode and decode molecules in ChemBed's native 256D latent space.
+    """Encode and decode molecules in ChemBed's 256D (or PCA-whitened) latent space.
 
     Parameters
     ----------
@@ -44,12 +49,18 @@ class ChemBedVAE:
         HuggingFace model repository ID.
     device : str, default="cuda"
         Target device (``"cuda"`` or ``"cpu"``).
+    pca_path : str, Path, or None, default=None
+        Optional joblib-persisted ``sklearn.decomposition.PCA`` transform
+        (whitened active subspace). When set, :attr:`latent_dim` becomes
+        ``pca.n_components_`` and :meth:`decode` / :meth:`encode` map
+        transparently through ``inverse_transform`` / ``transform``.
     """
 
     def __init__(
         self,
         repo_id: str = "3BioCompBio/chembed-default",
         device: str = "cuda",
+        pca_path: str | Path | None = None,
     ) -> None:
         use_cuda = device == "cuda" and torch.cuda.is_available()
         self.device = torch.device("cuda" if use_cuda else "cpu")
@@ -57,7 +68,18 @@ class ChemBedVAE:
             device=self.device, repo_id=repo_id
         )
         self._vae.eval()
-        self.latent_dim = int(prod(self._vae.latent_dimension))
+        self.raw_latent_dim = int(prod(self._vae.latent_dimension))
+        self._pca = joblib.load(pca_path) if pca_path else None
+        if self._pca is not None and self._pca.n_features_in_ != self.raw_latent_dim:
+            raise ValueError(
+                f"PCA expects {self._pca.n_features_in_} features, "
+                f"VAE has {self.raw_latent_dim}"
+            )
+        self.latent_dim = (
+            int(self._pca.n_components_)
+            if self._pca is not None
+            else self.raw_latent_dim
+        )
         torch.set_float32_matmul_precision("high")
 
     def decode(self, z: np.ndarray, batch_size: int = 256) -> list[str | None]:
@@ -67,6 +89,9 @@ class ChemBedVAE:
         """
         if len(z) == 0:
             return []
+
+        if self._pca is not None:
+            z = self._pca.inverse_transform(z)
 
         z_tensor = torch.as_tensor(z, dtype=torch.float32).unsqueeze(1)
         with (
@@ -90,12 +115,14 @@ class ChemBedVAE:
                 valid_idx.append(i)
                 valid_smiles.append(s)
 
-        out = np.zeros((len(smiles), self.latent_dim), dtype=np.float32)
-        if not valid_smiles:
-            return out
-
-        zs = enc.encode_multiple_smiles(valid_smiles, self._vae, batch_size=batch_size)
-        arr = zs.squeeze(1).cpu().numpy().astype(np.float32)
-        for i, idx in enumerate(valid_idx):
-            out[idx] = arr[i]
+        out = np.zeros((len(smiles), self.raw_latent_dim), dtype=np.float32)
+        if valid_smiles:
+            zs = enc.encode_multiple_smiles(
+                valid_smiles, self._vae, batch_size=batch_size
+            )
+            arr = zs.squeeze(1).cpu().numpy().astype(np.float32)
+            for i, idx in enumerate(valid_idx):
+                out[idx] = arr[i]
+        if self._pca is not None:
+            return self._pca.transform(out).astype(np.float32)
         return out

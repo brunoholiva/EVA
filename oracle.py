@@ -29,14 +29,17 @@ N_MINIMOL_FEATURES: int = 512
 
 
 def canonicalize_smiles(smiles: str) -> str | None:
-    """Return canonical SMILES for *smiles*, or ``None`` if invalid."""
+    """Return round-trip-valid canonical SMILES for *smiles*, or ``None``."""
     if not smiles:
         return None
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return None
     try:
-        return Chem.MolToSmiles(mol)
+        canonical = Chem.MolToSmiles(mol)
+        if not canonical or Chem.MolFromSmiles(canonical) is None:
+            return None
+        return canonical
     except Exception:
         return None
 
@@ -83,7 +86,11 @@ class MinimolFeaturizer:
         self.batch_size = batch_size
 
     def transform(self, smiles: list[str]) -> np.ndarray:
-        """Featurize chemically valid *smiles* into ``(n, 512)`` float32 features."""
+        """Featurize *smiles* into ``(n, 512)`` float32 features.
+
+        Any rare molecule that fails graph construction receives ``NaN``s so a
+        single degenerate decode cannot abort an entire search run.
+        """
         if not smiles:
             return np.empty((0, self.n_features), dtype=np.float32)
         if self._model is None:
@@ -91,7 +98,28 @@ class MinimolFeaturizer:
             from minimol_onnx import MinimolONNX
 
             self._model = MinimolONNX(batch_size=self.batch_size)
-        return self._model(smiles)
+        try:
+            return self._model(smiles)
+        except Exception:
+            return self._transform_fallback(smiles)
+
+    def _transform_fallback(self, smiles: list[str]) -> np.ndarray:
+        """Featurize molecule-by-molecule when a batch contains a broken graph."""
+        assert self._model is not None
+        out = np.full((len(smiles), self.n_features), np.nan, dtype=np.float32)
+        good_idx: list[int] = []
+        datas = []
+        for i, s in enumerate(smiles):
+            try:
+                datas.append(self._model.featurize_one(s))
+                good_idx.append(i)
+            except Exception:
+                continue
+        for start in range(0, len(datas), self.batch_size):
+            sub_idx = good_idx[start : start + self.batch_size]
+            feeds = self._model.collate(datas[start : start + self.batch_size])
+            out[sub_idx] = self._model.session.run(None, feeds)[0]
+        return out
 
 
 def move_model_to_device(model: TabPFNClassifier, device: str) -> TabPFNClassifier:
@@ -184,11 +212,12 @@ class Oracle:
 
     def score(self, canonical: list[str | None]) -> BatchScore:
         """Score a batch of canonical SMILES (``None`` for invalid decodes)."""
-        n = len(canonical)
+        out_canonical = list(canonical)
+        n = len(out_canonical)
         valid_mask = np.zeros(n, dtype=bool)
         oracle_mask = np.zeros(n, dtype=bool)
 
-        for i, smi in enumerate(canonical):
+        for i, smi in enumerate(out_canonical):
             if smi is not None:
                 valid_mask[i] = True
                 if smi not in self.seen:
@@ -200,18 +229,33 @@ class Oracle:
 
         idx = np.flatnonzero(oracle_mask)
         if len(idx) > 0:
-            novel_smiles = [canonical[i] for i in idx]  # type: ignore[misc]
+            novel_smiles = [out_canonical[i] for i in idx]  # type: ignore[misc]
             X = self._featurizer.transform(novel_smiles)
-            pa = np.asarray(self._predict_fn(X), dtype=np.float64)
-            finite = np.isfinite(pa)
-            good = idx[finite]
-            objectives[good] = pa[finite]
-            p_active[good] = pa[finite]
+            feat_ok = np.isfinite(X).all(axis=1)
+            if not feat_ok.all():
+                bad_smiles = {out_canonical[i] for i in idx[~feat_ok]}
+                for s in bad_smiles:
+                    if s is not None:
+                        self.seen.discard(s)
+                for j, smi in enumerate(out_canonical):
+                    if smi in bad_smiles:
+                        out_canonical[j] = None
+                        valid_mask[j] = False
+                        oracle_mask[j] = False
+                idx = idx[feat_ok]
+                X = X[feat_ok]
+
+            if len(idx) > 0:
+                pa = np.asarray(self._predict_fn(X), dtype=np.float64)
+                finite = np.isfinite(pa)
+                good = idx[finite]
+                objectives[good] = pa[finite]
+                p_active[good] = pa[finite]
 
         n_valid = int(valid_mask.sum())
         n_oracle = int(oracle_mask.sum())
         return BatchScore(
-            canonical=list(canonical),
+            canonical=out_canonical,
             objectives=objectives,
             p_active=p_active,
             oracle_mask=oracle_mask,

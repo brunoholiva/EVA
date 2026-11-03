@@ -42,6 +42,7 @@ class ModelsConfig:
     """Model paths and compute device."""
 
     vae_repo: str = "3BioCompBio/chembed-default"
+    pca_path: str = ""
     predictor_path: str = "data/predictor/tabpfn_minimol.joblib"
     device: str = "cuda"
 

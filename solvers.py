@@ -29,10 +29,24 @@ class SolverStats:
     """Compact per-step diagnostics logged into ``curve.csv``."""
 
     walker_spread: float = 0.0
+    mean_norm_mean: float = 0.0
     sigma_mean: float = 0.0
     sigma_min: float = 0.0
     axis_ratio_max: float = 0.0
     restarts: int = 0
+
+
+@dataclass(frozen=True)
+class WalkerState:
+    """Per-walker state snapshot for ``walkers.csv``."""
+
+    walker_id: int
+    steps: int = 0
+    mean_norm: float = 0.0
+    sigma: float = 0.0
+    axis_ratio: float = 0.0
+    restarts: int = 0
+    steps_since_restart: int = 0
 
 
 class Solver(Protocol):
@@ -50,6 +64,10 @@ class Solver(Protocol):
 
     def stats(self) -> SolverStats:
         """Return current diagnostic summary."""
+        ...
+
+    def walker_states(self) -> list[WalkerState]:
+        """Return per-walker state snapshots (empty for stateless baselines)."""
         ...
 
 
@@ -74,7 +92,9 @@ class CMAWalker:
         self._cfg = cfg
         self._init_rng = np.random.default_rng(init_seed)
         self._randn = _Randn(es_seed)
+        self.steps = 0
         self.restarts = 0
+        self.steps_since_restart = 0
         self._es = self._new_es()
 
     def _new_es(self) -> cma.CMAEvolutionStrategy:
@@ -106,6 +126,11 @@ class CMAWalker:
         return m
 
     @property
+    def mean_norm(self) -> float:
+        """Euclidean distance ``||mean||_2`` from the latent origin."""
+        return float(np.linalg.norm(self.mean))
+
+    @property
     def sigma(self) -> float:
         """Current step-size ``sigma``."""
         return float(self._es.sigma)
@@ -126,11 +151,26 @@ class CMAWalker:
     def tell(self, z: np.ndarray, objectives: np.ndarray) -> bool:
         """Feed maximization *objectives* (negated to losses) and restart if stopped."""
         self._es.tell(z, -np.asarray(objectives, dtype=np.float64))
+        self.steps += 1
         if self._es.stop():
             self.restarts += 1
+            self.steps_since_restart = 0
             self._es = self._new_es()
             return True
+        self.steps_since_restart += 1
         return False
+
+    def state(self) -> WalkerState:
+        """Snapshot current walker state."""
+        return WalkerState(
+            walker_id=self.walker_id,
+            steps=self.steps,
+            mean_norm=self.mean_norm,
+            sigma=self.sigma,
+            axis_ratio=self.axis_ratio,
+            restarts=self.restarts,
+            steps_since_restart=self.steps_since_restart,
+        )
 
 
 class MultiCMA:
@@ -170,20 +210,24 @@ class MultiCMA:
             w.tell(z[s:e], objectives[s:e])
 
     def stats(self) -> SolverStats:
-        """Aggregate walker spread, sigmas, axis ratios, and restarts."""
+        """Aggregate walker spread, mean norms, sigmas, axis ratios, and restarts."""
+        means = np.stack([w.mean for w in self.walkers], axis=0)
+        mean_norms = np.linalg.norm(means, axis=1)
         sigmas = [w.sigma for w in self.walkers]
         ratios = [w.axis_ratio for w in self.walkers]
-        spread = 0.0
-        if len(self.walkers) > 1:
-            means = np.stack([w.mean for w in self.walkers], axis=0)
-            spread = float(np.mean(np.std(means, axis=0)))
+        spread = float(np.mean(np.std(means, axis=0))) if len(self.walkers) > 1 else 0.0
         return SolverStats(
             walker_spread=spread,
+            mean_norm_mean=float(np.mean(mean_norms)),
             sigma_mean=float(np.mean(sigmas)),
             sigma_min=float(np.min(sigmas)),
             axis_ratio_max=float(np.max(ratios)),
             restarts=sum(w.restarts for w in self.walkers),
         )
+
+    def walker_states(self) -> list[WalkerState]:
+        """Return per-walker state snapshots in ``walker_id`` order."""
+        return [w.state() for w in self.walkers]
 
 
 class NaiveSolver:
@@ -205,6 +249,10 @@ class NaiveSolver:
     def stats(self) -> SolverStats:
         """Return zeroed diagnostics."""
         return SolverStats()
+
+    def walker_states(self) -> list[WalkerState]:
+        """Stateless baseline has no CMA walkers."""
+        return []
 
 
 def build_solver(
