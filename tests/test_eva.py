@@ -23,6 +23,7 @@ from oracle import (
     MinimolFeaturizer,
     Oracle,
     canonicalize_smiles,
+    circle_metrics,
     generic_scaffold,
 )
 from solvers import CMAWalker, MultiCMA, NaiveSolver, build_solver
@@ -36,9 +37,17 @@ class _LengthFeaturizer:
 
 def test_config_loads_repo_toml() -> None:
     cfg = Config.from_toml("config.toml")
-    assert cfg.cma.n_populations == 15
-    assert cfg.cma.popsize == 36
-    assert cfg.cma.batch_size == 540
+    assert cfg.cma.n_populations == 5
+    assert cfg.cma.popsize == 40
+    assert cfg.cma.init_std == 0.0
+    assert cfg.cma.batch_size == cfg.cma.n_populations * cfg.cma.popsize
+    assert cfg.cma.stagnation_steps == 50
+    assert cfg.cma.ipop_factor == 2.0
+    assert cfg.cma.max_popsize == 80
+    assert cfg.cma.resample_duplicates == 2
+    assert cfg.cma.soft_restart is True
+    assert cfg.cma.sigma_restart == 0.8
+    assert cfg.cma.opts == {"CMA_diagonal": 100}
     assert cfg.models.pca_path == "data/pca_prior.joblib"
     assert cfg.run.solver == "pycma"
     assert cfg.run.oracle_budget == 100_000
@@ -48,12 +57,27 @@ def test_config_loads_repo_toml() -> None:
 def test_config_opts_and_validation(tmp_path) -> None:
     p = tmp_path / "exp.toml"
     p.write_text(
-        "[cma]\npopsize = 20\n[cma.opts]\nCMA_diagonal = true\nminstd = 0.2\n"
+        "[cma]\npopsize = 20\nstagnation_steps = 50\nipop_factor = 2.0\nmax_popsize = 80\nresample_duplicates = 2\n"
+        "[cma.opts]\nCMA_diagonal = true\nminstd = 0.2\n"
         "[run]\noracle_budget = 500\n"
     )
     cfg = Config.from_toml(p)
+    assert cfg.cma.stagnation_steps == 50
+    assert cfg.cma.ipop_factor == 2.0
+    assert cfg.cma.max_popsize == 80
+    assert cfg.cma.resample_duplicates == 2
     assert cfg.cma.opts == {"CMA_diagonal": True, "minstd": 0.2}
 
+    with pytest.raises(ValueError, match="stagnation_steps"):
+        CMAConfig(stagnation_steps=-1)
+    with pytest.raises(ValueError, match="ipop_factor"):
+        CMAConfig(ipop_factor=0.5)
+    with pytest.raises(ValueError, match="max_popsize"):
+        CMAConfig(popsize=20, max_popsize=10)
+    with pytest.raises(ValueError, match="resample_duplicates"):
+        CMAConfig(resample_duplicates=-1)
+    with pytest.raises(ValueError, match="sigma_restart"):
+        CMAConfig(sigma_restart=0.0)
     with pytest.raises(ValueError, match="solver"):
         RunConfig(solver="grid")
     with pytest.raises(ValueError, match="oracle_budget"):
@@ -76,6 +100,42 @@ def test_generic_scaffold() -> None:
         "COC1CNC(=O)SC(=O)/C(=C(/O)C=O)OC=CS12(=O)NC=C(OC=S)N=C(Oc1ccc(F)cc1-c1cccs1)O2"
     )
     assert generic_scaffold(hypervalent) not in ("invalid", "acyclic", "")
+
+
+def test_circle_metrics_and_diverse_auc() -> None:
+    assert circle_metrics([], oracle_budget=100).n_circles == 0
+    assert circle_metrics([], oracle_budget=0).diverse_auc_top_k == 0.0
+
+    # Close diaryl-urea analogs collapse to 1 circle anchored on best p_active (0.95)
+    analogs = [
+        ("O=C(Nc1ccc(Cl)cc1)Nc1ccc(Cl)cc1", 0.70, 10),
+        ("O=C(Nc1ccc(Cl)c(Cl)c1)Nc1ccc(Cl)cc1", 0.95, 20),
+        ("Cc1ccc(NC(=O)Nc2ccc(Cl)cc2)cc1Cl", 0.85, 30),
+    ]
+    m_clones = circle_metrics(analogs, oracle_budget=100, top_k=2)
+    assert m_clones.n_circles == 1
+    assert np.isclose(m_clones.diverse_top_k, 0.95 / 2)
+
+    # Unrelated chemotypes form distinct circles; earlier discovery yields higher AUC
+    early = [
+        ("O=C(Nc1ccc(Cl)cc1)Nc1ccc(Cl)cc1", 0.90, 5),
+        ("CCCCCCCCCCCCO", 0.80, 10),
+        ("C1CCN(C2CCNCC2)CC1", 0.70, 15),  # > budget if budget=12
+    ]
+    late = [
+        ("O=C(Nc1ccc(Cl)cc1)Nc1ccc(Cl)cc1", 0.90, 85),
+        ("CCCCCCCCCCCCO", 0.80, 90),
+    ]
+    m_early = circle_metrics(early[:2], oracle_budget=100, top_k=2)
+    m_late = circle_metrics(late, oracle_budget=100, top_k=2)
+    assert m_early.n_circles == 2
+    assert np.isclose(m_early.diverse_top_k, 0.85)
+    assert np.isclose(m_late.diverse_top_k, 0.85)
+    assert m_early.diverse_auc_top_k > m_late.diverse_auc_top_k
+
+    # Hits strictly beyond oracle_budget are excluded
+    m_cut = circle_metrics(early, oracle_budget=12, top_k=2)
+    assert m_cut.n_circles == 2
 
 
 def test_minimol_featurizer() -> None:
@@ -130,6 +190,7 @@ def test_oracle_deduplication_and_accounting() -> None:
     assert b1.n_valid == 3
     assert b1.n_duplicates == 1
     assert b1.n_oracle_calls == 2
+    assert b1.oracle_mask.tolist() == [True, False, False, True]
     assert b1.objectives[0] > 0.0
     assert b1.objectives[1] == INVALID_OBJECTIVE
     assert b1.objectives[2] == INVALID_OBJECTIVE
@@ -139,6 +200,7 @@ def test_oracle_deduplication_and_accounting() -> None:
     assert calls[0] == 1
     assert b2.n_oracle_calls == 0
     assert b2.n_duplicates == 1
+    assert b2.oracle_mask.tolist() == [False]
     assert b2.objectives[0] == INVALID_OBJECTIVE
 
 
@@ -177,6 +239,95 @@ def test_cma_walker_and_solvers() -> None:
     assert wr.state().restarts == 1
     assert wr.state().steps == 1
     assert wr.state().steps_since_restart == 0
+
+    # Verify explicit stagnation_steps restart and improvement reset
+    ws = CMAWalker(
+        0,
+        4,
+        CMAConfig(
+            popsize=6,
+            init_std=0.0,
+            stagnation_steps=3,
+            soft_restart=True,
+            sigma_restart=0.8,
+        ),
+        init_seed=5,
+        es_seed=6,
+    )
+    non_imp = np.linspace(0.05, 0.15, 6)
+    assert ws.tell(ws.ask(), np.linspace(0.05, 0.20, 6)) is False
+    assert ws.tell(ws.ask(), non_imp) is False  # stagnant 1
+    assert ws.tell(ws.ask(), non_imp) is False  # stagnant 2
+    assert ws.tell(ws.ask(), np.linspace(0.05, 0.40, 6)) is False  # reset!
+    assert ws.tell(ws.ask(), non_imp) is False  # stagnant 1
+    assert ws.tell(ws.ask(), non_imp) is False  # stagnant 2
+    assert ws.tell(ws.ask(), non_imp) is True  # stagnant 3 -> restart!
+    assert ws.state().restarts == 1
+    assert ws.state().steps_since_restart == 0
+    # Best was 0.40 (< 0.5) -> hard restart to 0
+    assert ws.state().mean_norm == 0.0
+
+    # New cycle with active hits (>= 0.5) triggers soft restart at z_best with expanded sigma
+    z_act = ws.ask()
+    assert ws.tell(z_act, np.linspace(0.05, 0.70, 6)) is False
+    assert ws.tell(ws.ask(), non_imp) is False  # stagnant 1
+    assert ws.tell(ws.ask(), non_imp) is False  # stagnant 2
+    assert ws.tell(ws.ask(), non_imp) is True  # stagnant 3 -> soft restart!
+    assert ws.state().restarts == 2
+    assert ws.state().steps_since_restart == 0
+    assert ws.state().sigma == 0.8
+    assert np.allclose(ws.mean, z_act[-1])
+
+    # Verify IPOP doubling and max_popsize cap across heterogeneous MultiCMA walkers
+    mc_ipop = MultiCMA(
+        dim=4,
+        cfg=CMAConfig(
+            n_populations=2,
+            popsize=6,
+            init_std=0.0,
+            stagnation_steps=1,
+            ipop_factor=2.0,
+            max_popsize=18,
+        ),
+        seed=99,
+    )
+    z0, wid0 = mc_ipop.ask()
+    assert z0.shape == (12, 4)
+    # Walker 0 improves (stays at popsize=6); walker 1 stagnates -> restarts at 12
+    obj0 = np.concatenate([np.linspace(0.1, 0.5, 6), np.full(6, INVALID_OBJECTIVE)])
+    mc_ipop.tell(z0, obj0)
+    assert [w.popsize for w in mc_ipop.walkers] == [6, 12]
+    z1, wid1 = mc_ipop.ask()
+    assert z1.shape == (18, 4)
+    assert wid1.tolist() == [0] * 6 + [1] * 12
+    # Both stagnate -> walker 0 doubles 6->12; walker 1 caps 12*2 -> 18
+    mc_ipop.tell(z1, np.full(18, INVALID_OBJECTIVE))
+    assert [w.popsize for w in mc_ipop.walkers] == [12, 18]
+    assert [ws.popsize for ws in mc_ipop.walker_states()] == [12, 18]
+
+    # Verify resample_batch updates requested indices and preserves others
+    z2, _ = mc_ipop.ask()
+    z2_orig = z2.copy()
+    mc_ipop.resample_batch(z2, [2, 14])
+    assert not np.allclose(z2[2], z2_orig[2])
+    assert not np.allclose(z2[14], z2_orig[14])
+    assert np.allclose(z2[0], z2_orig[0])
+    assert np.allclose(z2[1], z2_orig[1])
+    assert np.allclose(z2[3], z2_orig[3])
+
+    # Verify [cma.opts] bounds keep proposals and mean strictly inside box
+    wb = CMAWalker(
+        0,
+        8,
+        CMAConfig(popsize=8, sigma0=1.5, opts={"bounds": [-3.0, 3.0]}),
+        init_seed=7,
+        es_seed=8,
+    )
+    for _ in range(10):
+        zb = wb.ask()
+        assert np.all((zb >= -3.0) & (zb <= 3.0))
+        wb.tell(zb, np.sum(zb, axis=1))
+    assert np.all((wb.mean >= -3.0) & (wb.mean <= 3.0))
 
     nv = build_solver("naive", dim=8, cfg=CMAConfig(n_populations=2, popsize=5), seed=1)
     assert isinstance(nv, NaiveSolver)
@@ -222,6 +373,7 @@ def test_candidate_store_and_run_search(tmp_path) -> None:
         seed=7,
         oracle_budget=14,
         hit_threshold=0.5,
+        resample_duplicates=2,
         save_all=False,
         show_progress=False,
     )
@@ -248,6 +400,9 @@ def test_candidate_store_and_run_search(tmp_path) -> None:
         assert np.isclose(walkers["hit_share_06"].max(), summary["top_walker_share_06"])
     saved = json.loads((out_off / "summary.json").read_text())
     assert saved["oracle_calls"] == summary["oracle_calls"]
+    assert "n_circles_06" in saved
+    assert "diverse_top10_06" in saved
+    assert 0.0 <= saved["diverse_auc_top10_06"] <= 1.0
 
     # Verify save_all=True writes all_evaluations.csv and naive writes empty walkers.csv
     out_all = tmp_path / "run_all"

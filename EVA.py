@@ -16,7 +16,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from config import VALID_SOLVERS, Config
-from oracle import Oracle, generic_scaffold
+from oracle import Oracle, circle_metrics, generic_scaffold
 from solvers import Solver, build_solver
 from vae import ChemBedVAE
 
@@ -55,6 +55,7 @@ CURVE_COLUMNS = [
 
 WALKER_COLUMNS = [
     "walker_id",
+    "popsize",
     "steps",
     "attempts",
     "oracle_calls",
@@ -123,6 +124,8 @@ class CandidateStore:
     def __init__(self, hit_threshold: float = 0.5) -> None:
         self.hit_threshold = hit_threshold
         self._hits: dict[str, Candidate] = {}
+        self.hits_06: list[tuple[str, float, int]] = []
+        self._seen_06: set[str] = set()
         self.best_p_active: float = 0.0
         self.n_hits_05: int = 0
         self.n_hits_06: int = 0
@@ -154,7 +157,7 @@ class CandidateStore:
         oracle_call: int,
     ) -> str | None:
         """Record one first-seen valid oracle-scored molecule; return scaffold if computed."""
-        if smiles in self._hits:
+        if smiles in self._hits or smiles in self._seen_06:
             return None
         if p_active > self.best_p_active:
             self.best_p_active = float(p_active)
@@ -170,6 +173,8 @@ class CandidateStore:
 
         scaff = generic_scaffold(smiles)
         if in_06:
+            self._seen_06.add(smiles)
+            self.hits_06.append((smiles, float(p_active), int(oracle_call)))
             self.n_hits_06 += 1
             self._scaffolds_06[scaff] += 1
         if keep:
@@ -220,6 +225,7 @@ def run_search(
     seed: int,
     oracle_budget: int,
     hit_threshold: float = 0.5,
+    resample_duplicates: int = 0,
     save_all: bool = False,
     show_progress: bool = True,
 ) -> tuple[dict[str, Any], CandidateStore]:
@@ -263,6 +269,24 @@ def run_search(
             while oracle_calls < oracle_budget and step < max_steps:
                 z, walker_ids = solver.ask()
                 canonical = decode_fn(z)
+
+                if resample_duplicates > 0 and hasattr(solver, "resample_batch"):
+                    for _ in range(resample_duplicates):
+                        batch_seen: set[str] = set()
+                        dup_indices: list[int] = []
+                        for i, smi in enumerate(canonical):
+                            if smi is not None:
+                                if smi in oracle.seen or smi in batch_seen:
+                                    dup_indices.append(i)
+                                else:
+                                    batch_seen.add(smi)
+                        if not dup_indices:
+                            break
+                        solver.resample_batch(z, dup_indices)
+                        new_sub = decode_fn(z[dup_indices])
+                        for orig_i, new_smi in zip(dup_indices, new_sub):
+                            canonical[orig_i] = new_smi
+
                 batch = oracle.score(canonical)
                 solver.tell(z, batch.objectives)
 
@@ -369,6 +393,7 @@ def run_search(
                     scaff60=store.unique_scaffolds_06,
                     val=f"{validity:.0%}",
                     sig=f"{st.sigma_mean:.2f}",
+                    rst=st.restarts,
                 )
                 step += 1
     finally:
@@ -386,6 +411,7 @@ def run_search(
         walker_rows.append(
             {
                 "walker_id": wst.walker_id,
+                "popsize": wst.popsize,
                 "steps": wst.steps,
                 "attempts": cnt.attempts,
                 "oracle_calls": cnt.oracle_calls,
@@ -414,6 +440,7 @@ def run_search(
     top_walker_share_06 = max((r["hit_share_06"] for r in walker_rows), default=0.0)
     walkers_restarted = sum(1 for r in walker_rows if r["restarts"] > 0)
 
+    cm = circle_metrics(store.hits_06, oracle_budget=oracle_budget)
     st = solver.stats()
     validity = (attempts - inv_attempts) / attempts if attempts else 0.0
     summary = {
@@ -433,6 +460,9 @@ def run_search(
         "n_hits_08": store.n_hits_08,
         "unique_scaffolds_06": store.unique_scaffolds_06,
         "largest_scaffold_frac_06": store.largest_scaffold_frac_06,
+        "n_circles_06": cm.n_circles,
+        "diverse_top10_06": cm.diverse_top_k,
+        "diverse_auc_top10_06": cm.diverse_auc_top_k,
         "n_walkers": n_walkers,
         "active_walkers_06": active_walkers_06,
         "top_walker_share_06": top_walker_share_06,
@@ -466,6 +496,11 @@ def _print_summary(
         f"hits>=0.8: {summary['n_hits_08']:,} | "
         f"scaffolds>=0.6: {summary['unique_scaffolds_06']:,} "
         f"(max cluster {summary['largest_scaffold_frac_06']:.1%})"
+    )
+    print(
+        f"  diversity (P>=0.6, d>0.75): circles={summary['n_circles_06']:,} | "
+        f"div_top10={summary['diverse_top10_06']:.4f} | "
+        f"div_auc_top10={summary['diverse_auc_top10_06']:.4f}"
     )
     if summary["n_walkers"] > 0:
         print(
@@ -560,6 +595,7 @@ def main(argv: list[str] | None = None) -> None:
             seed=seed,
             oracle_budget=seed_cfg.run.oracle_budget,
             hit_threshold=seed_cfg.run.hit_threshold,
+            resample_duplicates=seed_cfg.cma.resample_duplicates,
             save_all=seed_cfg.run.save_all,
         )
         (out_dir / "config.json").write_text(json.dumps(asdict(seed_cfg), indent=2))

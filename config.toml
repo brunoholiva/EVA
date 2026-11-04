@@ -1,11 +1,18 @@
 [cma]
-n_populations = 15
-popsize = 36
+n_populations = 5
+popsize = 40
 sigma0 = 0.5
 init_std = 0.0
+stagnation_steps = 50
+ipop_factor = 2.0
+max_popsize = 80
+resample_duplicates = 2
+soft_restart = true
+sigma_restart = 0.8
 
 [cma.opts]
 # Optional direct passthrough to cma.CMAEvolutionStrategy (e.g. minstd = 0.25, CMA_diagonal = true)
+CMA_diagonal = 100
 
 [models]
 vae_repo = "3BioCompBio/chembed-default"

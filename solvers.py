@@ -41,6 +41,7 @@ class WalkerState:
     """Per-walker state snapshot for ``walkers.csv``."""
 
     walker_id: int
+    popsize: int = 0
     steps: int = 0
     mean_norm: float = 0.0
     sigma: float = 0.0
@@ -92,24 +93,33 @@ class CMAWalker:
         self._cfg = cfg
         self._init_rng = np.random.default_rng(init_seed)
         self._randn = _Randn(es_seed)
+        self._current_popsize = cfg.popsize
         self.steps = 0
         self.restarts = 0
         self.steps_since_restart = 0
+        self._cycle_best = -np.inf
+        self._cycle_best_z: np.ndarray | None = None
+        self._stagnant_steps = 0
         self._es = self._new_es()
 
-    def _new_es(self) -> cma.CMAEvolutionStrategy:
-        """Instantiate ``CMAEvolutionStrategy`` at a fresh ``x0``."""
-        if self._cfg.init_std == 0.0:
-            x0 = np.zeros(self.dim, dtype=np.float64)
-        else:
-            x0 = self._init_rng.normal(0.0, self._cfg.init_std, size=self.dim)
+    def _new_es(
+        self, x0: np.ndarray | None = None, sigma: float | None = None
+    ) -> cma.CMAEvolutionStrategy:
+        """Instantiate ``CMAEvolutionStrategy`` at ``x0`` and ``sigma``."""
+        if x0 is None:
+            if self._cfg.init_std == 0.0:
+                x0 = np.zeros(self.dim, dtype=np.float64)
+            else:
+                x0 = self._init_rng.normal(0.0, self._cfg.init_std, size=self.dim)
+        if sigma is None:
+            sigma = self._cfg.sigma0
 
         opts: dict[str, Any] = dict(self._cfg.opts)
         opts.setdefault("verbose", -9)
-        opts["popsize"] = self._cfg.popsize
+        opts["popsize"] = self._current_popsize
         opts["randn"] = self._randn
         opts["seed"] = np.nan
-        return cma.CMAEvolutionStrategy(x0, self._cfg.sigma0, opts)
+        return cma.CMAEvolutionStrategy(x0, sigma, opts)
 
     @property
     def popsize(self) -> int:
@@ -142,20 +152,70 @@ class CMAWalker:
         if spectrum is None or len(spectrum) == 0:
             return 1.0
         d = np.asarray(spectrum, dtype=np.float64)
+        sigma_vec = getattr(self._es, "sigma_vec", None)
+        if sigma_vec is not None and hasattr(sigma_vec, "scaling"):
+            scaling = getattr(sigma_vec, "scaling", None)
+            if scaling is not None:
+                d = d * np.asarray(scaling, dtype=np.float64)
         return float(np.max(d) / max(float(np.min(d)), 1e-12))
 
-    def ask(self) -> np.ndarray:
-        """Propose ``(popsize, dim)`` candidate vectors."""
+    def ask(self, number: int | None = None) -> np.ndarray:
+        """Propose ``(popsize, dim)`` or ``(number, dim)`` candidate vectors."""
+        if number is not None:
+            return np.asarray(self._es.ask(number), dtype=np.float64)
         return np.asarray(self._es.ask(), dtype=np.float64)
+
+    def resample_indices(self, z_batch: np.ndarray, indices: list[int]) -> np.ndarray:
+        """Replace candidate vectors at *indices* with fresh samples."""
+        if not indices:
+            return z_batch
+        fresh = np.asarray(self._es.ask(len(indices)), dtype=np.float64)
+        for idx, new_x in zip(indices, fresh):
+            z_batch[idx] = new_x
+        return z_batch
 
     def tell(self, z: np.ndarray, objectives: np.ndarray) -> bool:
         """Feed maximization *objectives* (negated to losses) and restart if stopped."""
-        self._es.tell(z, -np.asarray(objectives, dtype=np.float64))
+        objs = np.asarray(objectives, dtype=np.float64)
+        self._es.tell(z, -objs)
         self.steps += 1
-        if self._es.stop():
+
+        step_best = float(np.max(objs))
+        if step_best >= 0.0 and step_best > self._cycle_best + 1e-12:
+            self._cycle_best = step_best
+            best_idx = int(np.argmax(objs))
+            self._cycle_best_z = np.copy(z[best_idx])
+            self._stagnant_steps = 0
+        else:
+            self._stagnant_steps += 1
+
+        stagnated = (
+            self._cfg.stagnation_steps > 0
+            and self._stagnant_steps >= self._cfg.stagnation_steps
+        )
+        if self._es.stop() or stagnated:
             self.restarts += 1
             self.steps_since_restart = 0
-            self._es = self._new_es()
+
+            if (
+                self._cfg.soft_restart
+                and self._cycle_best >= 0.5
+                and self._cycle_best_z is not None
+            ):
+                restart_x0 = np.copy(self._cycle_best_z)
+                restart_sigma = self._cfg.sigma_restart
+            else:
+                restart_x0 = None
+                restart_sigma = None
+
+            self._cycle_best = -np.inf
+            self._cycle_best_z = None
+            self._stagnant_steps = 0
+            next_pop = int(round(self._current_popsize * self._cfg.ipop_factor))
+            if self._cfg.max_popsize > 0:
+                next_pop = min(next_pop, self._cfg.max_popsize)
+            self._current_popsize = max(self._cfg.popsize, next_pop)
+            self._es = self._new_es(x0=restart_x0, sigma=restart_sigma)
             return True
         self.steps_since_restart += 1
         return False
@@ -164,6 +224,7 @@ class CMAWalker:
         """Snapshot current walker state."""
         return WalkerState(
             walker_id=self.walker_id,
+            popsize=self.popsize,
             steps=self.steps,
             mean_norm=self.mean_norm,
             sigma=self.sigma,
@@ -201,6 +262,19 @@ class MultiCMA:
         self._slices = slices
         self.batch_size = pos
         return np.concatenate(xs, axis=0), np.concatenate(wids, axis=0)
+
+    def resample_batch(
+        self, z_batch: np.ndarray, duplicate_indices: list[int]
+    ) -> np.ndarray:
+        """Resample candidate vectors at *duplicate_indices* using respective walkers."""
+        if not duplicate_indices or not self._slices:
+            return z_batch
+        idx_set = set(duplicate_indices)
+        for w, (s, e) in zip(self.walkers, self._slices):
+            w_dups = [i - s for i in range(s, e) if i in idx_set]
+            if w_dups:
+                w.resample_indices(z_batch[s:e], w_dups)
+        return z_batch
 
     def tell(self, z: np.ndarray, objectives: np.ndarray) -> None:
         """Slice batch objectives back to each walker."""

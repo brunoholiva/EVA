@@ -18,6 +18,12 @@ class CMAConfig:
     popsize: int = 36
     sigma0: float = 0.5
     init_std: float = 1.0
+    stagnation_steps: int = 0
+    ipop_factor: float = 1.0
+    max_popsize: int = 0
+    resample_duplicates: int = 0
+    soft_restart: bool = True
+    sigma_restart: float = 0.8
     opts: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -30,6 +36,16 @@ class CMAConfig:
             raise ValueError("cma.sigma0 must be > 0")
         if self.init_std < 0.0:
             raise ValueError("cma.init_std must be >= 0")
+        if self.stagnation_steps < 0:
+            raise ValueError("cma.stagnation_steps must be >= 0")
+        if self.ipop_factor < 1.0:
+            raise ValueError("cma.ipop_factor must be >= 1.0")
+        if self.max_popsize < 0 or (0 < self.max_popsize < self.popsize):
+            raise ValueError("cma.max_popsize must be 0 or >= cma.popsize")
+        if self.resample_duplicates < 0:
+            raise ValueError("cma.resample_duplicates must be >= 0")
+        if self.sigma_restart <= 0.0:
+            raise ValueError("cma.sigma_restart must be > 0")
 
     @property
     def batch_size(self) -> int:

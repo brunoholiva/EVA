@@ -5,15 +5,16 @@ from __future__ import annotations
 import os
 import sys
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from contextlib import contextmanager, redirect_stderr
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import joblib
 import numpy as np
-from rdkit import Chem
+from rdkit import Chem, DataStructs
+from rdkit.Chem import rdFingerprintGenerator
 from rdkit.Chem.Scaffolds.MurckoScaffold import GetScaffoldForMol, MakeScaffoldGeneric
 from rdkit.rdBase import DisableLog
 
@@ -26,6 +27,111 @@ INVALID_OBJECTIVE: float = -1.0
 """Maximization objective assigned to invalid or duplicate molecules."""
 
 N_MINIMOL_FEATURES: int = 512
+
+CIRCLE_DISTANCE_THRESHOLD: float = 0.75
+"""Default Tanimoto distance cutoff ``t`` for ``#Circles`` (Xie et al., ICLR 2023)."""
+
+DIVERSE_TOP_K: int = 10
+"""Default circle count ``K`` for ``Diverse AUC Top-K``."""
+
+_MORGAN_GEN = None
+
+
+def _morgan_generator():
+    """Lazily initialize ECFP4 (radius=2, 2048-bit) Morgan generator."""
+    global _MORGAN_GEN
+    if _MORGAN_GEN is None:
+        _MORGAN_GEN = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=2048)
+    return _MORGAN_GEN
+
+
+@dataclass(frozen=True)
+class CircleMetrics:
+    """Diversity and sample-efficiency metrics under ``#Circles`` sphere exclusion."""
+
+    n_circles: int = 0
+    diverse_top_k: float = 0.0
+    diverse_auc_top_k: float = 0.0
+
+
+def _greedy_circles(
+    ordered: Iterable[tuple[float, int, Any]],
+    max_sim: float,
+    limit: int | None = None,
+) -> list[float]:
+    """Return scores of greedily selected circle centers from score-sorted *ordered*."""
+    centers: list[Any] = []
+    scores: list[float] = []
+    for pa, _, fp in ordered:
+        if (
+            not centers
+            or max(DataStructs.BulkTanimotoSimilarity(fp, centers)) < max_sim
+        ):
+            centers.append(fp)
+            scores.append(pa)
+            if limit is not None and len(centers) >= limit:
+                break
+    return scores
+
+
+def circle_metrics(
+    hits: Iterable[tuple[str, float, int]],
+    oracle_budget: int,
+    distance_threshold: float = CIRCLE_DISTANCE_THRESHOLD,
+    top_k: int = DIVERSE_TOP_K,
+    n_checkpoints: int = 100,
+) -> CircleMetrics:
+    """Compute ``#Circles(t)`` and ``Diverse AUC Top-K(t)`` up to *oracle_budget*.
+
+    Parameters
+    ----------
+    hits : iterable of ``(smiles, p_active, oracle_call)``
+        Active molecules (e.g. ``P(active) >= 0.6``) and their discovery call index.
+    oracle_budget : int
+        Total oracle-call budget ``B``; hits with ``oracle_call > B`` are excluded.
+    distance_threshold : float
+        Minimum pairwise Tanimoto distance ``d = 1 - sim > t`` between circle centers.
+    top_k : int
+        Number of top circle centers averaged for ``diverse_top_k`` and its AUC.
+    n_checkpoints : int
+        Number of evenly spaced budget intervals for trapezoidal AUC integration.
+    """
+    if oracle_budget <= 0 or top_k <= 0:
+        return CircleMetrics()
+
+    max_sim = 1.0 - float(distance_threshold)
+    gen = _morgan_generator()
+    items: list[tuple[float, int, Any]] = []
+    for smi, pa, call in hits:
+        if int(call) > oracle_budget:
+            continue
+        mol = Chem.MolFromSmiles(smi)
+        if mol is None:
+            continue
+        items.append((float(pa), int(call), gen.GetFingerprint(mol)))
+
+    if not items:
+        return CircleMetrics()
+
+    items.sort(key=lambda x: (-x[0], x[1]))
+    n_circles = len(_greedy_circles(items, max_sim))
+    final_scores = _greedy_circles(items, max_sim, limit=top_k)
+    diverse_top_k = float(sum(final_scores) / top_k)
+
+    grid = np.linspace(0.0, float(oracle_budget), n_checkpoints + 1)
+    curve = np.empty(len(grid), dtype=np.float64)
+    for idx, c in enumerate(grid):
+        sub_scores = _greedy_circles(
+            (it for it in items if it[1] <= c), max_sim, limit=top_k
+        )
+        curve[idx] = sum(sub_scores) / top_k
+    auc = float(np.trapz(curve, grid) / oracle_budget)
+
+    return CircleMetrics(
+        n_circles=n_circles,
+        diverse_top_k=diverse_top_k,
+        diverse_auc_top_k=auc,
+    )
 
 
 def canonicalize_smiles(smiles: str) -> str | None:
