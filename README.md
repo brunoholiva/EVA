@@ -13,9 +13,9 @@ SELFIES Transformer VAE, scored by a **TabPFN v3.5** antimicrobial classifier on
 | File | Role |
 | :--- | :--- |
 | `vae.py` | `ChemBedVAE`: 256D (or whitened-PCA) latent $\leftrightarrow$ canonical SMILES in a single pass |
-| `oracle.py` | `MinimolFeaturizer`, `TabPFN` inference, SMILES deduplication (`-1.0` penalty, `0` oracle calls on repeats), and generic Murcko scaffolds |
-| `solvers.py` | `MultiCMA` (`K` independent `pycma` walkers with `[cma.opts]` passthrough) and `NaiveSolver` (`N(0, I)` baseline) |
-| `EVA.py` | Oracle-budget loop (`tqdm`), `CandidateStore`, CSV/JSON outputs, and CLI |
+| `oracle.py` | `MinimolFeaturizer`, `TabPFN` inference, SMILES deduplication, generic Murcko scaffolds, and `#Circles` / `Diverse AUC Top-10` |
+| `solvers.py` | `MultiCMA` ($K$ independent `pycma` walkers with Soft Restart, IPOP doubling, and `[cma.opts]` passthrough) and `NaiveSolver` (`N(0, I)` baseline) |
+| `EVA.py` | Oracle-budget loop (`tqdm`), pre-scoring latent deduplication, `CandidateStore`, CSV/JSON outputs, and CLI |
 | `config.py` / `config.toml` | Minimal typed TOML configuration (`stdlib` `tomllib`) |
 | `scripts/fit_latent_pca.py` | Fits oracle-free whitened PCA (`data/pca_prior.joblib`) from 150k prior-generated ChemBed molecules |
 | `scripts/train_tabpfn.py` | Fits `data/predictor/tabpfn_minimol.joblib` from training SMILES |
@@ -30,7 +30,7 @@ uv sync
 ## Usage
 
 ```bash
-# Run default config (15 independent pycma walkers, 100k oracle-call budget)
+# Run default config (5 independent pycma walkers, 100k oracle-call budget)
 uv run python EVA.py --config config.toml
 
 # Multi-seed comparison: pycma vs N(0, I) naive baseline
@@ -43,17 +43,17 @@ uv run python EVA.py --config config.toml --save-all
 
 ### Outputs (`results/<run_name>/`)
 
-- `candidates.csv` — unique valid molecules with `P(active) >= hit_threshold`,
+- `candidates.csv`: unique valid molecules with `P(active) >= hit_threshold`,
   ranked descending (`rank, canonical_smiles, p_active, generic_scaffold, walker_id, step, oracle_call`).
-- `curve.csv` — per-step trajectory (`oracle_calls`, `validity`, `best_p_active`,
+- `curve.csv`: per-step trajectory (`oracle_calls`, `validity`, `best_p_active`,
   `n_hits_05/06/08`, `unique_scaffolds_06`, `walker_spread`, `mean_norm_mean`,
   `sigma_mean`, `sigma_min`, `axis_ratio_max`, `restarts`).
-- `walkers.csv` — per-walker diagnostics (`attempts`, `oracle_calls`,
+- `walkers.csv`: per-walker diagnostics (`popsize`, `attempts`, `oracle_calls`,
   `duplicate_rate`, `best_p_active`, `n_hits_05/06/08`, `hit_share_06`,
   `unique_scaffolds_06`, `mean_norm`, `sigma`, `axis_ratio`, `restarts`,
   `steps_since_restart`).
-- `summary.json` & `config.json` — final metrics, walker contribution share, scaffold cluster share, and resolved config.
-- `all_evaluations.csv` — written only when `save_all = true` or `--save-all` is passed.
+- `summary.json` & `config.json`: final metrics (`#Circles(0.75)`, `Diverse AUC Top-10`, walker contribution share, scaffold cluster share) and resolved config.
+- `all_evaluations.csv`: written only when `save_all = true` or `--save-all` is passed.
 
 ## Development
 
